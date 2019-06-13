@@ -168,7 +168,13 @@ impl<S: Snapshot> MvccTxn<S> {
         } else {
             // value is long
             let ts = self.start_ts;
-            self.put_value(key.clone(), ts, value.unwrap());
+            // self.put_value(key.clone(), ts, value.unwrap());
+            let write = Write::new(
+                WriteType::from_lock_type(lock_type).unwrap(),
+                0,  // start_ts
+                value,
+            );
+            self.put_write(key.clone(), ts, write.to_bytes());
 
             self.lock_key(
                 key,
@@ -371,7 +377,7 @@ impl<S: Snapshot> MvccTxn<S> {
                             primary: primary.to_vec(),
                         });
                     }
-                    self.check_data_constraint(should_not_exist, &write, &key)?;
+                    // self.check_data_constraint(should_not_exist, &write, &key)?;
                 }
             }
             // ... or locks at any timestamp.
@@ -461,12 +467,22 @@ impl<S: Snapshot> MvccTxn<S> {
                 };
             }
         };
-        let write = Write::new(
-            WriteType::from_lock_type(lock_type).unwrap(),
-            self.start_ts,
-            short_value,
-        );
-        self.put_write(key.clone(), commit_ts, write.to_bytes());
+        // let mut value = short_value;
+        // if short_value.is_none() {
+            // load value from write column instead
+            // if let Some((commit_ts, write)) = self.reader.seek_write(&key, u64::max_value())? {
+                // short_value = write.short_value.clone();
+            // }
+            // erase stale write column, fast if we add a mutate_key method in titan
+        // }
+        if !short_value.is_none() {  // write back data from lock
+            let write = Write::new(
+                WriteType::from_lock_type(lock_type).unwrap(),
+                self.start_ts,
+                short_value,
+            );
+            self.put_write(key.clone(), commit_ts, write.to_bytes());
+        }
         self.unlock_key(key);
         Ok(is_pessimistic_txn)
     }

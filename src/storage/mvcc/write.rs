@@ -69,7 +69,7 @@ impl Write {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = Vec::with_capacity(1 + MAX_VAR_U64_LEN + SHORT_VALUE_MAX_LEN + 2);
         b.push(self.write_type.to_u8());
-        b.encode_var_u64(self.start_ts).unwrap();
+        // b.encode_var_u64(self.start_ts).unwrap();
         if let Some(ref v) = self.short_value {
             b.push(SHORT_VALUE_PREFIX);
             b.push(v.len() as u8);
@@ -83,7 +83,8 @@ impl Write {
             return Err(Error::BadFormatWrite);
         }
         let write_type = WriteType::from_u8(b.read_u8()?).ok_or(Error::BadFormatWrite)?;
-        let start_ts = number::decode_var_u64(&mut b)?;
+        // let start_ts = number::decode_var_u64(&mut b)?;
+        let start_ts = 0;
         if b.is_empty() {
             return Ok(Write::new(write_type, start_ts, None));
         }
@@ -96,6 +97,7 @@ impl Write {
         );
 
         let len = b.read_u8()?;
+        /*
         if len as usize != b.len() {
             panic!(
                 "short value len [{}] not equal to content len [{}]",
@@ -103,6 +105,7 @@ impl Write {
                 b.len()
             );
         }
+        */
         Ok(Write::new(write_type, start_ts, Some(b.to_vec())))
     }
 
