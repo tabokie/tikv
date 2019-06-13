@@ -8,7 +8,7 @@ use crate::storage::mvcc::write::{Write, WriteType};
 use crate::storage::mvcc::{Error, Result};
 use crate::storage::{Key, Value};
 use engine::{IterOption, DATA_KEY_PREFIX_LEN};
-use engine::{CF_LOCK, CF_WRITE};
+use engine::{CF_LOCK, CF_DEFAULT, CF_WRITE};
 use kvproto::kvrpcpb::IsolationLevel;
 use tikv_util::keybuilder::KeyBuilder;
 
@@ -147,7 +147,7 @@ impl<S: Snapshot> MvccReader<S> {
                 let iter_opt = IterOption::new(None, None, self.fill_cache);
                 let iter = self
                     .snapshot
-                    .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(false))?;
+                    .iter_cf(CF_DEFAULT, iter_opt, self.get_scan_mode(false))?;
                 self.write_cursor = Some(iter);
             }
         } else {
@@ -155,7 +155,7 @@ impl<S: Snapshot> MvccReader<S> {
             let iter_opt = IterOption::default()
                 .use_prefix_seek()
                 .set_prefix_same_as_start(true);
-            let iter = self.snapshot.iter_cf(CF_WRITE, iter_opt, ScanMode::Mixed)?;
+            let iter = self.snapshot.iter_cf(CF_DEFAULT, iter_opt, ScanMode::Mixed)?;
             self.write_cursor = Some(iter);
         }
 
@@ -287,7 +287,7 @@ impl<S: Snapshot> MvccReader<S> {
             let iter_opt = self.gen_iter_opt();
             let iter = self
                 .snapshot
-                .iter_cf(CF_WRITE, iter_opt, self.get_scan_mode(true))?;
+                .iter_cf(CF_DEFAULT, iter_opt, self.get_scan_mode(true))?;
             self.write_cursor = Some(iter);
         }
         Ok(())
@@ -385,7 +385,7 @@ impl<S: Snapshot> MvccReader<S> {
     ) -> Result<(Vec<Key>, Option<Key>)> {
         let iter_opt = IterOption::new(None, None, self.fill_cache);
         let scan_mode = self.get_scan_mode(false);
-        let mut cursor = self.snapshot.iter_cf(CF_WRITE, iter_opt, scan_mode)?;
+        let mut cursor = self.snapshot.iter_cf(CF_DEFAULT, iter_opt, scan_mode)?;
         let mut keys = vec![];
         loop {
             let ok = match start {
@@ -463,7 +463,7 @@ impl<S: Snapshot> MvccReader<S> {
     }
 
     fn get_mvcc_properties(&self, safe_point: u64) -> Option<MvccProperties> {
-        let collection = match self.snapshot.get_properties_cf(CF_WRITE) {
+        let collection = match self.snapshot.get_properties_cf(CF_DEFAULT) {
             Ok(v) => v,
             Err(_) => return None,
         };

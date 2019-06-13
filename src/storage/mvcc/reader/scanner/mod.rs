@@ -82,7 +82,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
     /// Build `Scanner` from the current configuration.
     pub fn build(mut self) -> Result<Scanner<S>> {
         let lock_cursor = self.create_cf_cursor(CF_LOCK)?;
-        let write_cursor = self.create_cf_cursor(CF_WRITE)?;
+        let write_cursor = self.create_cf_cursor(CF_DEFAULT)?;
         if self.desc {
             Ok(Scanner::Backward(BackwardScanner::new(
                 self.0,

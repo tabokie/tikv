@@ -212,7 +212,7 @@ pub mod tests {
     use kvproto::kvrpcpb::{Context, IsolationLevel};
 
     use crate::storage::{Engine, Key, Modify, Mutation, Options, ScanMode, Snapshot};
-    use engine::CF_WRITE;
+    use engine::CF_DEFAULT;
 
     use super::*;
 
@@ -522,7 +522,7 @@ pub mod tests {
     ) {
         let snapshot = engine.snapshot(&Context::new()).unwrap();
         let k = Key::from_raw(key).append_ts(commit_ts);
-        let v = snapshot.get_cf(CF_WRITE, &k).unwrap().unwrap();
+        let v = snapshot.get_cf(CF_DEFAULT, &k).unwrap().unwrap();
         let write = Write::parse(&v).unwrap();
         assert_eq!(write.start_ts, start_ts);
         assert_eq!(write.write_type, tp);

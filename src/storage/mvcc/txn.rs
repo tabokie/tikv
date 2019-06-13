@@ -129,14 +129,14 @@ impl<S: Snapshot> MvccTxn<S> {
 
     fn put_write(&mut self, key: Key, ts: u64, value: Value) {
         let key = key.append_ts(ts);
-        self.write_size += CF_WRITE.len() + key.as_encoded().len() + value.len();
-        self.writes.push(Modify::Put(CF_WRITE, key, value));
+        self.write_size += CF_DEFAULT.len() + key.as_encoded().len() + value.len();
+        self.writes.push(Modify::Put(CF_DEFAULT, key, value));
     }
 
     fn delete_write(&mut self, key: Key, ts: u64) {
         let key = key.append_ts(ts);
-        self.write_size += CF_WRITE.len() + key.as_encoded().len();
-        self.writes.push(Modify::Delete(CF_WRITE, key));
+        self.write_size += CF_DEFAULT.len() + key.as_encoded().len();
+        self.writes.push(Modify::Delete(CF_DEFAULT, key));
     }
 
     fn key_exist(&mut self, key: &Key, ts: u64) -> Result<bool> {
