@@ -242,6 +242,10 @@ impl ApplyCallback {
     }
 
     fn invoke_all(self, host: &CoprocessorHost) {
+        info!(
+            "SSD-HC callback";
+            "region_id" => self.region.get_id(),
+        );
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
             if let Some(cb) = cb {
@@ -329,7 +333,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             kv_wb_last_keys: 0,
             last_applied_index: 0,
             committed_count: 0,
-            enable_sync_log: cfg.sync_log,
+            enable_sync_log: true /*cfg.sync_log*/,
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
@@ -2696,6 +2700,13 @@ impl ApplyFsm {
             return;
         }
         let applied_index = self.delegate.apply_state.get_applied_index();
+        info!(
+            "SSD-SS handle_snapshot";
+            "region_id" => self.delegate.region_id(),
+            "peer_id" => self.delegate.id(),
+            "snap_task.commit_index()" => snap_task.commit_index(),
+            "applied_index" => applied_index,
+        );
         assert!(snap_task.commit_index() <= applied_index);
         let mut need_sync = apply_ctx
             .apply_res
@@ -2815,6 +2826,23 @@ impl ApplyFsm {
                     if channel_timer.is_none() {
                         channel_timer = Some(start);
                     }
+
+                    for entry in apply.entries.iter().rev() {
+                        let t = match entry.get_entry_type() {
+                            EntryType::EntryNormal => 0,
+                            EntryType::EntryConfChange => 1,
+                            EntryType::EntryConfChangeV2 => 2,
+                        };
+                        info!(
+                            "SSD-HC apply_entry";
+                            "region_id" => self.delegate.region_id(),
+                            "peer_id" => self.delegate.id(),
+                            "index" => entry.get_index(),
+                            "term" => entry.get_term(),
+                            "type" => t,
+                        );
+                    }
+
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
@@ -2907,7 +2935,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm, Contro
                 }
                 _ => {}
             }
-            self.apply_ctx.enable_sync_log = incoming.sync_log;
+            self.apply_ctx.enable_sync_log = true/*incoming.sync_log*/;
         }
     }
 

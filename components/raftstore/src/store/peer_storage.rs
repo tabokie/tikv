@@ -524,6 +524,8 @@ pub struct PeerStorage {
     stats: CacheQueryStats,
 
     pub tag: String,
+
+    pub synced_idx: u64,
 }
 
 impl Storage for PeerStorage {
@@ -578,6 +580,7 @@ impl PeerStorage {
         }
         let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
         let applied_index_term = init_applied_index_term(&engines, region, &apply_state)?;
+        let applied_index = (&apply_state).applied_index;
 
         Ok(PeerStorage {
             engines,
@@ -594,6 +597,7 @@ impl PeerStorage {
             last_term,
             cache: EntryCache::default(),
             stats: CacheQueryStats::default(),
+            synced_idx: applied_index,
         })
     }
 
@@ -618,6 +622,10 @@ impl PeerStorage {
             hard_state,
             conf_state_from_region(self.region()),
         ))
+    }
+
+    pub fn on_sync(&mut self) {
+        self.synced_idx = self.last_index();
     }
 
     fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {
@@ -766,6 +774,15 @@ impl PeerStorage {
 
     fn validate_snap(&self, snap: &Snapshot, request_index: u64) -> bool {
         let idx = snap.get_metadata().get_index();
+
+        info!(
+            "SSD-SS validate_snapshot";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+            "snap_index" => idx,
+            "request_index" => request_index,
+            "synced_index" => self.synced_idx,
+        );
         if idx < self.truncated_index() || idx < request_index {
             // stale snapshot, should generate again.
             info!(
@@ -811,6 +828,22 @@ impl PeerStorage {
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no unavailable
     /// snapshot.
     pub fn snapshot(&self, request_index: u64) -> raft::Result<Snapshot> {
+        // SSD-TODO: need +1?
+        if self.synced_idx < request_index {
+            info!(
+                "SSD-SS reject snapshot";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "request_idx" => request_index,
+                "synced_idx" => self.synced_idx,
+                "last_idx" => self.raft_state.get_last_index(),
+                "applied_idx" => self.apply_state.get_applied_index(),
+            );
+            return Err(raft::Error::Store(
+                raft::StorageError::SnapshotTemporarilyUnavailable,
+            ));
+        }
+
         let mut snap_state = self.snap_state.borrow_mut();
         let mut tried_cnt = self.snap_tried_cnt.borrow_mut();
 
@@ -871,7 +904,7 @@ impl PeerStorage {
         let (tx, rx) = mpsc::sync_channel(1);
         *snap_state = SnapState::Generating(rx);
 
-        let task = GenSnapTask::new(self.region.get_id(), self.committed_index(), tx);
+        let task = GenSnapTask::new(self.region.get_id(), cmp::min(self.committed_index(), self.synced_idx), tx);
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
         *gen_snap_task = Some(task);
@@ -927,6 +960,13 @@ impl PeerStorage {
                 .delete(&keys::raft_log_key(self.get_region_id(), i)));
         }
 
+        info!(
+            "SSD-SI set_last_index_1";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+            "old" => invoke_ctx.raft_state.get_last_index(),
+            "new" => last_index,
+        );
         invoke_ctx.raft_state.set_last_index(last_index);
         invoke_ctx.last_term = last_term;
 
@@ -1004,6 +1044,13 @@ impl PeerStorage {
 
         let last_index = snap.get_metadata().get_index();
 
+        info!(
+            "SSD-SI set_last_index_2";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+            "old" => ctx.raft_state.get_last_index(),
+            "new" => last_index,
+        );
         ctx.raft_state.set_last_index(last_index);
         ctx.last_term = snap.get_metadata().get_term();
         ctx.apply_state.set_applied_index(last_index);
@@ -1226,6 +1273,13 @@ impl PeerStorage {
         }
 
         if !ready.entries().is_empty() {
+            info!(
+                "SSD-SI peer_storage_append";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "old" => ctx.raft_state.get_last_index(),
+                "new" => ready.entries().last().unwrap().get_index(),
+            );
             self.append(&mut ctx, ready.entries(), ready_ctx)?;
         }
 

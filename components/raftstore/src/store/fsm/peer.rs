@@ -267,7 +267,7 @@ impl<E: KvEngine> Fsm for PeerFsm<E> {
     }
 }
 
-pub struct PeerFsmDelegate<'a, T: 'static, C: 'static> {
+pub struct PeerFsmDelegate<'a, T: Transport + 'static, C: 'static> {
     fsm: &'a mut PeerFsm<RocksEngine>,
     ctx: &'a mut PollContext<T, C>,
 }
@@ -605,6 +605,18 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
             }
+            let mut committed_len = 0;
+            {   if let Some(v) = &r.0.committed_entries {
+                    committed_len = v.len()
+                }
+            }
+            info!(
+                "SSD-RD new ready";
+                "region_id" => self.fsm.peer.region().get_id(),
+                "peer_id" => self.fsm.peer.peer_id(),
+                "is_leader" => self.fsm.peer.is_leader(),
+                "committed_len" => committed_len,
+            );
             self.ctx.ready_res.push(r);
         }
     }

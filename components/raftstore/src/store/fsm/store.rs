@@ -8,6 +8,7 @@ use engine_traits::{
     WriteBatch, WriteBatchExt, WriteBatchVecExt, WriteOptions,
 };
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+use raft::eraftpb::MessageType;
 use futures::Future;
 use kvproto::import_sstpb::SstMeta;
 use kvproto::metapb::{self, Region, RegionEpoch};
@@ -68,6 +69,7 @@ use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+use rand::prelude::random;
 
 type Key = Vec<u8>;
 
@@ -197,7 +199,101 @@ impl<E: KvEngine> RaftRouter<E> {
     }
 }
 
-pub struct PollContext<T, C: 'static> {
+pub struct BlockableTransport<T: Transport + 'static> {
+    trans: T,
+    cache: Vec<RaftMessage>,
+    enabled: bool,
+    id: u64,
+}
+
+impl<T: Transport + 'static> BlockableTransport<T> {
+    pub fn new(trans: T, enabled: bool) -> BlockableTransport<T> {
+        BlockableTransport {
+            trans,
+            cache: vec![],
+            enabled: enabled,
+            id: random(),
+        }
+    }
+
+    pub fn maybe_cache_send(&mut self, msg: RaftMessage) -> Result<()> {
+        if !self.enabled {
+            return self.trans.send(msg);
+        }
+
+        if msg.get_message().get_msg_type() == MessageType::MsgAppendResponse {
+            info!(
+                "SSD-MS cache raft msg";
+                "region_id" => msg.get_region_id(),
+                "from" => msg.get_from_peer().get_id(),
+                "to" => msg.get_to_peer().get_id(),
+                "t_i_id" => self.id,
+            );
+            self.cache.push(msg);
+            Ok(())
+        } else {
+            self.trans.send(msg)
+        }
+    }
+
+    pub fn cached_count(&self) -> usize {
+        self.cache.len()
+    }
+
+    pub fn send_cached(&mut self) {
+        if self.cache.len() == 0 {
+            return;
+        }
+        info!(
+            "SSD-MS start_send_cached";
+            "count" => self.cache.len(),
+            "t_i_id" => self.id,
+        );
+        for msg in self.cache.drain(..) {
+            let region_id = msg.get_region_id();
+            let from_peer_id = msg.get_from_peer().get_id();
+            let to_peer_id = msg.get_to_peer().get_id();
+            info!(
+                "SSD-MS send_cached";
+                "region_id" => region_id,
+                "from_peer" => from_peer_id,
+                "to_peer" => to_peer_id,
+                "thread_id" => self.id,
+            );
+            let res = self.trans.send(msg);
+            if let Err(err) = res {
+                // SSD-TODO: handle error: notifications, etc
+                warn!(
+                    "SSD-MS failed to send_cached to other peer";
+                    "region_id" => region_id,
+                    "from_peer" => from_peer_id,
+                    "to_peer" => to_peer_id,
+                    "err" => ?err,
+                    "t_i_id" => self.id,
+                );
+            }
+        }
+        self.trans.flush();
+    }
+}
+
+impl<T: Transport + 'static> Transport for BlockableTransport<T> {
+    fn send(&mut self, msg: RaftMessage) -> Result<()> {
+        self.trans.send(msg)
+    }
+
+    fn flush(&mut self) {
+        self.trans.flush()
+    }
+}
+
+impl<T: Transport + 'static> Clone for BlockableTransport<T> {
+    fn clone(&self) -> BlockableTransport<T> {
+        BlockableTransport::new(self.trans.clone(), self.enabled)
+    }
+}
+
+pub struct PollContext<T: Transport + 'static, C: 'static> {
     pub cfg: Config,
     pub store: metapb::Store,
     pub pd_scheduler: FutureScheduler<PdTask>,
@@ -217,7 +313,7 @@ pub struct PollContext<T, C: 'static> {
     pub applying_snap_count: Arc<AtomicUsize>,
     pub coprocessor_host: CoprocessorHost,
     pub timer: SteadyTimer,
-    pub trans: T,
+    pub trans: BlockableTransport<T>,
     pub pd_client: Arc<C>,
     pub global_stat: GlobalStoreStat,
     pub store_stat: LocalStoreStat,
@@ -231,9 +327,10 @@ pub struct PollContext<T, C: 'static> {
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
+    pub last_sync_time: Instant,
 }
 
-impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
+impl<T: Transport + 'static, C> HandleRaftReadyContext for PollContext<T, C> {
     fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
         (&mut self.kv_wb, &mut self.raft_wb)
     }
@@ -259,7 +356,7 @@ impl<T, C> HandleRaftReadyContext for PollContext<T, C> {
     }
 }
 
-impl<T, C> PollContext<T, C> {
+impl<T: Transport + 'static, C> PollContext<T, C> {
     #[inline]
     pub fn store_id(&self) -> u64 {
         self.store.get_id()
@@ -383,7 +480,7 @@ impl Fsm for StoreFsm {
     }
 }
 
-struct StoreFsmDelegate<'a, T: 'static, C: 'static> {
+struct StoreFsmDelegate<'a, T: Transport + 'static, C: 'static> {
     fsm: &'a mut StoreFsm,
     ctx: &'a mut PollContext<T, C>,
 }
@@ -460,7 +557,7 @@ impl<'a, T: Transport, C: PdClient> StoreFsmDelegate<'a, T, C> {
     }
 }
 
-pub struct RaftPoller<T: 'static, C: 'static> {
+pub struct RaftPoller<T: Transport + 'static, C: 'static> {
     tag: String,
     store_msg_buf: Vec<StoreMsg>,
     peer_msg_buf: Vec<PeerMsg<RocksEngine>>,
@@ -479,6 +576,10 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
         if !self.pending_proposals.is_empty() {
             for prop in self.pending_proposals.drain(..) {
+                info!(
+                    "SSD-HC proposal";
+                    "region_id" => prop.region_id,
+                );
                 self.poll_ctx
                     .apply_router
                     .schedule_task(prop.region_id, ApplyTask::Proposal(prop));
@@ -527,6 +628,27 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
         }
         fail_point!("raft_between_save");
+        let mut sync = self.poll_ctx.sync_log;
+        if !sync {
+            if self.poll_ctx.trans.cached_count() > 1024 {
+                info!(
+                    "SSD-SH do_sync";
+                    "reason" => "trans_too_many",
+                    "cached_count" => self.poll_ctx.trans.cached_count(),
+                );
+                sync = true;
+            } else {
+                let elapsed = Instant::now().duration_since(self.poll_ctx.last_sync_time);
+                if elapsed > Duration::from_millis(self.poll_ctx.cfg.delay_ms) {
+                    info!(
+                        "SSD-SH do_sync";
+                        "reason" => "last_sync_too_long",
+                        "elapsed_ms" => elapsed.as_millis(),
+                    );
+                    sync = true;
+                }
+            }
+        }
         if !self.poll_ctx.raft_wb.is_empty() {
             fail_point!(
                 "raft_before_save_on_store_1",
@@ -534,7 +656,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 |_| {}
             );
             let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(self.poll_ctx.cfg.sync_log || self.poll_ctx.sync_log);
+            write_opts.set_sync(sync);
             self.poll_ctx
                 .engines
                 .raft
@@ -550,6 +672,12 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
         }
         fail_point!("raft_after_save");
+
+        if sync {
+            self.poll_ctx.trans.send_cached();
+            self.poll_ctx.last_sync_time = Instant::now();
+        }
+
         if ready_cnt != 0 {
             let mut batch_pos = 0;
             let mut ready_res = mem::replace(&mut self.poll_ctx.ready_res, Vec::default());
@@ -563,6 +691,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 }
                 PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
                     .post_raft_ready_append(ready, invoke_ctx);
+                peers[batch_pos].peer.maybe_on_sync(sync);
             }
         }
         let dur = self.timer.elapsed();
@@ -597,6 +726,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 
 impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for RaftPoller<T, C> {
     fn begin(&mut self, batch_size: usize) {
+        info!("SSD-BS BEGIN");
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;
@@ -688,6 +818,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
                 }
             }
         }
+
         let mut delegate = PeerFsmDelegate::new(peer, &mut self.poll_ctx);
         delegate.handle_msgs(&mut self.peer_msg_buf);
         delegate.collect_ready(&mut self.pending_proposals);
@@ -936,7 +1067,7 @@ where
             applying_snap_count: self.applying_snap_count.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
             timer: SteadyTimer::default(),
-            trans: self.trans.clone(),
+            trans: BlockableTransport::new(self.trans.clone(), self.cfg.value().delay_send_msg),
             pd_client: self.pd_client.clone(),
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),
@@ -950,6 +1081,7 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
+            last_sync_time: Instant::now(),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {

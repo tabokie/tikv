@@ -32,6 +32,7 @@ use uuid::Uuid;
 use crate::coprocessor::{CoprocessorHost, RegionChangeEvent};
 use crate::store::fsm::apply::CatchUpLogs;
 use crate::store::fsm::store::PollContext;
+use crate::store::fsm::store::BlockableTransport;
 use crate::store::fsm::{
     apply, Apply, ApplyMetrics, ApplyTask, GroupState, Proposal, RegionProposal,
 };
@@ -337,7 +338,7 @@ impl Peer {
 
     /// Register self to apply_scheduler so that the peer is then usable.
     /// Also trigger `RegionChangeEvent::Create` here.
-    pub fn activate<T, C>(&self, ctx: &PollContext<T, C>) {
+    pub fn activate<T: Transport + 'static, C>(&self, ctx: &PollContext<T, C>) {
         ctx.apply_router
             .schedule_task(self.region_id, ApplyTask::register(self));
 
@@ -448,7 +449,7 @@ impl Peer {
     /// 1. Set the region to tombstone;
     /// 2. Clear data;
     /// 3. Notify all pending requests.
-    pub fn destroy<T, C>(&mut self, ctx: &PollContext<T, C>, keep_data: bool) -> Result<()> {
+    pub fn destroy<T: Transport + 'static, C>(&mut self, ctx: &PollContext<T, C>, keep_data: bool) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = Instant::now();
 
@@ -471,7 +472,7 @@ impl Peer {
         )?;
         // write kv rocksdb first in case of restart happen between two write
         let mut write_opts = WriteOptions::new();
-        write_opts.set_sync(ctx.cfg.sync_log);
+        write_opts.set_sync(true);
         ctx.engines.kv.write_opt(&kv_wb, &write_opts)?;
         ctx.engines.raft.write_opt(&raft_wb, &write_opts)?;
 
@@ -663,7 +664,7 @@ impl Peer {
     }
 
     #[inline]
-    fn send<T, I>(&mut self, trans: &mut T, msgs: I, metrics: &mut RaftMessageMetrics)
+    fn send<T, I>(&mut self, trans: &mut BlockableTransport<T>, msgs: I, metrics: &mut RaftMessageMetrics)
     where
         T: Transport,
         I: IntoIterator<Item = eraftpb::Message>,
@@ -714,7 +715,7 @@ impl Peer {
     }
 
     /// Steps the raft message.
-    pub fn step<T, C>(
+    pub fn step<T: Transport + 'static, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
         mut m: eraftpb::Message,
@@ -881,7 +882,7 @@ impl Peer {
         false
     }
 
-    pub fn check_stale_state<T, C>(&mut self, ctx: &mut PollContext<T, C>) -> StaleState {
+    pub fn check_stale_state<T: Transport + 'static, C>(&mut self, ctx: &mut PollContext<T, C>) -> StaleState {
         if self.is_leader() {
             // Leaders always have valid state.
             //
@@ -921,7 +922,7 @@ impl Peer {
         }
     }
 
-    fn on_role_changed<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
+    fn on_role_changed<T: Transport + 'static, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         // Update leader lease when the Raft state changes.
         if let Some(ss) = ready.ss() {
             match ss.raft_state {
@@ -960,6 +961,28 @@ impl Peer {
             }
             ctx.coprocessor_host
                 .on_role_change(self.region(), ss.raft_state);
+        }
+    }
+
+    pub fn maybe_on_sync(&mut self, synced: bool) {
+        info!(
+            "SSD-SI maybe_on_sync";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.peer_id(),
+            "synced" => synced,
+            "prev synced_idx" => self.get_store().synced_idx,
+            "curr last_index" => self.get_store().last_index(),
+            "curr committed" => self.raft_group.raft.raft_log.committed,
+            "last_applying_idx" => self.last_applying_idx,
+        );
+        if synced {
+            self.mut_store().on_sync();
+            info!(
+                "SSD-SI maybe_on_sync set synced_idx";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "synced_idx" => self.get_store().synced_idx,
+            );
         }
     }
 
@@ -1031,6 +1054,16 @@ impl Peer {
 
     // Check if this peer can handle request_snapshot.
     pub fn ready_to_handle_request_snapshot(&mut self, request_index: u64) -> bool {
+        info!(
+            "SSD-SS check handle snapshot";
+            "region_id" => self.region().get_id(),
+            "peer_id" => self.peer_id(),
+            "request_index" => request_index,
+            "store.applied_index" => self.get_store().applied_index(),
+            "store.last_index" => self.get_store().last_index(),
+            "peer.last_applying_index" => self.last_applying_idx,
+            "peer.sync_index" => self.get_store().synced_idx,
+        );
         let reject_reason = if !self.is_leader() {
             // Only leader can handle request snapshot.
             "not_leader"
@@ -1073,8 +1106,16 @@ impl Peer {
     ///
     /// Only apply existing logs has another benefit that we don't need to deal with snapshots
     /// that are older than apply index as apply index <= last index <= index of snapshot.
-    pub fn can_early_apply(&self, term: u64, index: u64) -> bool {
-        self.get_store().last_index() >= index && self.get_store().last_term() >= term
+    pub fn can_early_apply(&self, _term: u64, _index: u64) -> bool {
+        // SSD-TODO
+        /*
+        if self.is_leader() {
+            self.get_store().synced_idx >= index && self.get_store().last_term() >= term
+        } else {
+            self.get_store().last_index() >= index && self.get_store().last_term() >= term
+        }
+        */
+        return false;
     }
 
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
@@ -1177,10 +1218,43 @@ impl Peer {
             }
         }
 
-        if !self
-            .raft_group
-            .has_ready_since(Some(self.last_applying_idx))
-        {
+        let delay_sync_enabled = ctx.cfg.delay_sync_log;
+
+        let must_sync = if delay_sync_enabled {
+            info!(
+                "SSD-SI check_has_must_sync_ready";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "apply_index" => self.get_store().applied_index(),
+                "last_applying_index" => self.last_applying_idx,
+                "synced_index" => self.get_store().synced_idx,
+            );
+            let sync = self.raft_group.has_must_sync_ready();
+            if sync {
+                info!(
+                    "SSD-SH do_sync";
+                    "reason" => "has_must_sync_ready",
+                );
+            }
+            sync
+        } else {
+            info!(
+                "SSD-SH do_sync";
+                "reason" => "delay_sync_not_enabled",
+            );
+            true
+        };
+
+        if must_sync {
+            ctx.sync_log = true;
+        }
+        let has_ready = if must_sync {
+            self.raft_group.has_ready_since(Some((self.last_applying_idx, None)))
+        } else {
+            self.raft_group.has_ready_since(Some((self.last_applying_idx, Some(self.get_store().synced_idx))))
+        };
+
+        if !has_ready {
             // Generating snapshot task won't set ready for raft group.
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
                 self.pending_request_snapshot_count
@@ -1206,7 +1280,11 @@ impl Peer {
         };
         before_handle_raft_ready_1003();
 
-        let mut ready = self.raft_group.ready_since(self.last_applying_idx);
+        let mut ready = if must_sync {
+            self.raft_group.ready_since(self.last_applying_idx)
+        } else {
+            self.raft_group.ready_from_range(self.last_applying_idx, self.get_store().synced_idx)
+        };
 
         self.on_role_changed(ctx, &ready);
 
@@ -1229,6 +1307,18 @@ impl Peer {
             self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message);
         }
 
+        info!(
+            "SSD-RD peer_handle_ready";
+            "is_leader" => self.is_leader(),
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+            "must_sync" => ready.must_sync(),
+            "msg_len" => ready.messages.len(),
+            "entries" => ready.entries().len(),
+            "entries_index" => ready.entries().last().map_or(0, |x| x.get_index()),
+            "committed_entries" => ready.committed_entries.as_ref().map_or(0, Vec::len),
+            "committed_entries_index" => ready.committed_entries.as_ref().map_or(0, |v| v.last().map_or(0, |x| x.get_index())),
+        );
         let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
             Ok(r) => r,
             Err(e) => {
@@ -1298,7 +1388,7 @@ impl Peer {
         apply_snap_result
     }
 
-    pub fn handle_raft_ready_apply<T, C>(
+    pub fn handle_raft_ready_apply<T: Transport + 'static, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
         ready: &mut Ready,
@@ -1399,6 +1489,25 @@ impl Peer {
                     term,
                     committed_index,
                 );
+
+                /*
+                for entry in apply.entries.iter().rev() {
+                    let t = match entry.get_entry_type() {
+                        EntryType::EntryNormal => 0,
+                        EntryType::EntryConfChange => 1,
+                        EntryType::EntryConfChangeV2 => 2,
+                    };
+                    info!(
+                        "SSD-HC send_entry_to_apply";
+                        "region_id" => self.region_id,
+                        "peer_id" => self.peer.get_id(),
+                        "index" => entry.get_index(),
+                        "term" => entry.get_term(),
+                        "type" => t,
+                    );
+                }
+                */
+
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
             }
@@ -1433,7 +1542,7 @@ impl Peer {
         self.proposals.gc();
     }
 
-    fn response_read<T, C>(
+    fn response_read<T: Transport + 'static, C>(
         &self,
         read: &mut ReadIndexRequest,
         ctx: &mut PollContext<T, C>,
@@ -1464,7 +1573,7 @@ impl Peer {
     }
 
     /// Responses to the ready read index request on the replica, the replica is not a leader.
-    fn post_pending_read_index_on_replica<T, C>(&mut self, ctx: &mut PollContext<T, C>) {
+    fn post_pending_read_index_on_replica<T: Transport + 'static, C>(&mut self, ctx: &mut PollContext<T, C>) {
         while let Some(mut read) = self.pending_reads.pop_front() {
             assert!(read.read_index.is_some());
             let is_read_index_request = read.cmds.len() == 1
@@ -1483,7 +1592,7 @@ impl Peer {
         }
     }
 
-    fn apply_reads<T, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
+    fn apply_reads<T: Transport + 'static, C>(&mut self, ctx: &mut PollContext<T, C>, ready: &Ready) {
         let mut propose_time = None;
         let states = ready.read_states().iter().map(|state| {
             let uuid = Uuid::from_slice(state.request_ctx.as_slice()).unwrap();
@@ -1527,7 +1636,7 @@ impl Peer {
         }
     }
 
-    pub fn post_apply<T, C>(
+    pub fn post_apply<T: Transport + 'static, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
         apply_state: RaftApplyState,
@@ -1582,7 +1691,7 @@ impl Peer {
     }
 
     /// Try to renew leader lease.
-    fn maybe_renew_leader_lease<T, C>(
+    fn maybe_renew_leader_lease<T: Transport + 'static, C>(
         &mut self,
         ts: Timespec,
         ctx: &mut PollContext<T, C>,
@@ -1673,7 +1782,7 @@ impl Peer {
     /// Propose a request.
     ///
     /// Return true means the request has been proposed successfully.
-    pub fn propose<T: Transport, C>(
+    pub fn propose<T: Transport + 'static, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
         cb: Callback<RocksEngine>,
@@ -1732,7 +1841,7 @@ impl Peer {
         }
     }
 
-    fn post_propose<T, C>(
+    fn post_propose<T: Transport + 'static, C>(
         &mut self,
         poll_ctx: &mut PollContext<T, C>,
         mut meta: ProposalMeta,
@@ -1784,7 +1893,7 @@ impl Peer {
     ///    Then at least '(total - 1)/2 + 1' other nodes (the node about to be removed is excluded)
     ///    need to be up to date for now. If 'allow_remove_leader' is false then
     ///    the peer to be removed should not be the leader.
-    fn check_conf_change<T, C>(
+    fn check_conf_change<T: Transport + 'static, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
         cmd: &RaftCmdRequest,
@@ -1918,7 +2027,7 @@ impl Peer {
         true
     }
 
-    fn ready_to_transfer_leader<T, C>(
+    fn ready_to_transfer_leader<T: Transport + 'static, C>(
         &self,
         ctx: &mut PollContext<T, C>,
         mut index: u64,
@@ -1958,7 +2067,7 @@ impl Peer {
         None
     }
 
-    fn read_local<T, C>(
+    fn read_local<T: Transport + 'static, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
@@ -2170,7 +2279,7 @@ impl Peer {
         Ok(min.unwrap_or(0))
     }
 
-    fn pre_propose_prepare_merge<T, C>(
+    fn pre_propose_prepare_merge<T: Transport + 'static, C>(
         &self,
         ctx: &mut PollContext<T, C>,
         req: &mut RaftCmdRequest,
@@ -2227,7 +2336,7 @@ impl Peer {
         Ok(())
     }
 
-    fn pre_propose<T, C>(
+    fn pre_propose<T: Transport + 'static, C>(
         &self,
         poll_ctx: &mut PollContext<T, C>,
         req: &mut RaftCmdRequest,
@@ -2256,7 +2365,7 @@ impl Peer {
         Ok(ctx)
     }
 
-    fn propose_normal<T, C>(
+    fn propose_normal<T: Transport + 'static, C>(
         &mut self,
         poll_ctx: &mut PollContext<T, C>,
         mut req: RaftCmdRequest,
@@ -2315,7 +2424,7 @@ impl Peer {
         Ok(propose_index)
     }
 
-    fn execute_transfer_leader<T, C>(
+    fn execute_transfer_leader<T: Transport + 'static, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
         msg: &eraftpb::Message,
@@ -2389,7 +2498,7 @@ impl Peer {
     ///     does, it calls raft transfer_leader API to do the remaining work.
     ///
     /// See also: tikv/rfcs#37.
-    fn propose_transfer_leader<T, C>(
+    fn propose_transfer_leader<T: Transport + 'static, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
@@ -2414,7 +2523,7 @@ impl Peer {
     // 2. Removing the leader is not allowed in the configuration;
     // 3. The conf change makes the raft group not healthy;
     // 4. The conf change is dropped by raft group internally.
-    fn propose_conf_change<T, C>(
+    fn propose_conf_change<T: Transport + 'static, C>(
         &mut self,
         ctx: &mut PollContext<T, C>,
         req: &RaftCmdRequest,
@@ -2472,7 +2581,7 @@ impl Peer {
         Ok(propose_index)
     }
 
-    fn handle_read<T, C>(
+    fn handle_read<T: Transport + 'static, C>(
         &self,
         ctx: &mut PollContext<T, C>,
         req: RaftCmdRequest,
@@ -2529,7 +2638,7 @@ impl Peer {
         None
     }
 
-    pub fn heartbeat_pd<T, C>(&mut self, ctx: &PollContext<T, C>) {
+    pub fn heartbeat_pd<T: Transport + 'static, C>(&mut self, ctx: &PollContext<T, C>) {
         let task = PdTask::Heartbeat {
             term: self.term(),
             region: self.region().clone(),
@@ -2551,7 +2660,7 @@ impl Peer {
         }
     }
 
-    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut T) {
+    fn send_raft_message<T: Transport>(&mut self, msg: eraftpb::Message, trans: &mut BlockableTransport<T>) {
         let mut send_msg = RaftMessage::default();
         send_msg.set_region_id(self.region_id);
         // set current epoch
@@ -2602,24 +2711,42 @@ impl Peer {
         }
         send_msg.set_message(msg);
 
-        if let Err(e) = trans.send(send_msg) {
-            warn!(
-                "failed to send msg to other peer";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "target_peer_id" => to_peer_id,
-                "target_store_id" => to_store_id,
-                "err" => ?e,
-            );
-            if to_peer_id == self.leader_id() {
-                self.leader_unreachable = true;
-            }
-            // unreachable store
-            self.raft_group.report_unreachable(to_peer_id);
-            if msg_type == eraftpb::MessageType::MsgSnapshot {
-                self.raft_group
-                    .report_snapshot(to_peer_id, SnapshotStatus::Failure);
-            }
+        let res = if !self.is_leader() {
+            trans.maybe_cache_send(send_msg)
+        } else {
+            trans.send(send_msg)
+        };
+        self.handle_send_result(msg_type, to_peer_id, to_store_id, res);
+    }
+
+    pub fn handle_send_result(
+        &mut self,
+        msg_type: eraftpb::MessageType,
+        to_peer_id: u64,
+        to_store_id: u64,
+        result: Result<()>,
+    ) {
+        let err = if let Err(err) = result {
+            err
+        } else {
+            return;
+        };
+        warn!(
+            "failed to send msg to other peer";
+            "region_id" => self.region_id,
+            "peer_id" => self.peer.get_id(),
+            "target_peer_id" => to_peer_id,
+            "target_store_id" => to_store_id,
+            "err" => ?err,
+        );
+        if to_peer_id == self.leader_id() {
+            self.leader_unreachable = true;
+        }
+        // unreachable store
+        self.raft_group.report_unreachable(to_peer_id);
+        if msg_type == eraftpb::MessageType::MsgSnapshot {
+            self.raft_group
+                .report_snapshot(to_peer_id, SnapshotStatus::Failure);
         }
     }
 
