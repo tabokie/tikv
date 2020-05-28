@@ -976,6 +976,7 @@ impl Peer {
             "last_applying_idx" => self.last_applying_idx,
         );
         if synced {
+            self.raft_group.raft.on_sync();
             self.mut_store().on_sync();
             info!(
                 "SSD-SI maybe_on_sync set synced_idx";
@@ -1218,9 +1219,7 @@ impl Peer {
             }
         }
 
-        let delay_sync_enabled = ctx.cfg.delay_sync_log;
-
-        let must_sync = if delay_sync_enabled {
+        let must_sync = if ctx.cfg.delay_sync_log {
             info!(
                 "SSD-SI check_has_must_sync_ready";
                 "region_id" => self.region_id,
