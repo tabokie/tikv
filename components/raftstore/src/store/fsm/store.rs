@@ -55,7 +55,7 @@ use crate::store::DynamicConfig;
 use crate::store::PdTask;
 use crate::store::{
     util, Callback, CasualMessage, PeerMsg, RaftCommand, SignificantMsg, SnapManager,
-    SnapshotDeleter, StoreMsg, StoreTick,
+    SnapshotDeleter, StoreMsg, StoreTick, PeerMsgIrrelevantInfo,
 };
 use crate::Result;
 use engine_rocks::{CompactedEvent, CompactionListener};
@@ -69,7 +69,6 @@ use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
-use rand::prelude::random;
 
 type Key = Vec<u8>;
 
@@ -201,22 +200,30 @@ impl<E: KvEngine> RaftRouter<E> {
 
 pub struct BlockableTransport<T: Transport + 'static> {
     trans: T,
-    cache: Vec<RaftMessage>,
+    router: RaftRouter<RocksEngine>,
+    cache: Vec<(RaftMessage, PeerMsgIrrelevantInfo)>,
     enabled: bool,
-    id: u64,
 }
 
 impl<T: Transport + 'static> BlockableTransport<T> {
-    pub fn new(trans: T, enabled: bool) -> BlockableTransport<T> {
+    pub fn new(
+        trans: T,
+        router: RaftRouter<RocksEngine>,
+        enabled: bool
+    ) -> BlockableTransport<T> {
         BlockableTransport {
             trans,
+            router,
             cache: vec![],
             enabled: enabled,
-            id: random(),
         }
     }
 
-    pub fn maybe_cache_send(&mut self, msg: RaftMessage) -> Result<()> {
+    pub fn maybe_cache_send(
+        &mut self, msg: RaftMessage,
+        to_leader: bool,
+        is_snapshot_msg: bool
+    ) -> Result<()> {
         if !self.enabled {
             return self.trans.send(msg);
         }
@@ -224,7 +231,12 @@ impl<T: Transport + 'static> BlockableTransport<T> {
         if msg.get_message().get_msg_type() == MessageType::MsgAppendResponse {
             self.trans.send(msg)
         } else {
-            self.cache.push(msg);
+            let to_peer_id = msg.get_to_peer().get_id();
+            self.cache.push((msg, PeerMsgIrrelevantInfo {
+                to_leader,
+                is_snapshot_msg,
+                to_peer_id,
+            }));
             Ok(())
         }
     }
@@ -237,21 +249,20 @@ impl<T: Transport + 'static> BlockableTransport<T> {
         if self.cache.len() == 0 {
             return;
         }
-        for msg in self.cache.drain(..) {
+        for (msg, info) in self.cache.drain(..) {
             let region_id = msg.get_region_id();
             let from_peer_id = msg.get_from_peer().get_id();
             let to_peer_id = msg.get_to_peer().get_id();
             let res = self.trans.send(msg);
             if let Err(err) = res {
-                // SSD-TODO: handle error: notifications, etc
                 warn!(
-                    "SSD-MS failed to send_cached to other peer";
+                    "failed to send to other peer from transport cache";
                     "region_id" => region_id,
-                    "from_peer" => from_peer_id,
-                    "to_peer" => to_peer_id,
+                    "peer_id" => from_peer_id,
+                    "target_peer_id" => to_peer_id,
                     "err" => ?err,
-                    "t_i_id" => self.id,
                 );
+                self.router.send(region_id, PeerMsg::AsyncMsgFailed(info)).unwrap();
             }
         }
         self.trans.flush();
@@ -270,7 +281,7 @@ impl<T: Transport + 'static> Transport for BlockableTransport<T> {
 
 impl<T: Transport + 'static> Clone for BlockableTransport<T> {
     fn clone(&self) -> BlockableTransport<T> {
-        BlockableTransport::new(self.trans.clone(), self.enabled)
+        BlockableTransport::new(self.trans.clone(), self.router.clone(), self.enabled)
     }
 }
 
@@ -1046,7 +1057,11 @@ where
             applying_snap_count: self.applying_snap_count.clone(),
             coprocessor_host: self.coprocessor_host.clone(),
             timer: SteadyTimer::default(),
-            trans: BlockableTransport::new(self.trans.clone(), self.cfg.value().delay_send_msg),
+            trans: BlockableTransport::new(
+                self.trans.clone(),
+                self.router.clone(),
+                self.cfg.value().delay_send_msg
+            ),
             pd_client: self.pd_client.clone(),
             global_stat: self.global_stat.clone(),
             store_stat: self.global_stat.local(),

@@ -315,6 +315,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                 }
                 PeerMsg::Noop => {}
                 PeerMsg::Synced => self.fsm.peer.on_sync(),
+                PeerMsg::AsyncMsgFailed(info) => self.fsm.peer.on_send_err(
+                    info.to_leader,
+                    info.is_snapshot_msg,
+                    info.to_peer_id
+                ),
             }
         }
     }
@@ -605,11 +610,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             if !r.0.entries().is_empty() {
                 self.register_raft_gc_log_tick();
                 self.register_split_region_check_tick();
-            }
-            let mut committed_len = 0;
-            {   if let Some(v) = &r.0.committed_entries {
-                    committed_len = v.len()
-                }
             }
             self.ctx.ready_res.push(r);
         }

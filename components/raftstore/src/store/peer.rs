@@ -2634,40 +2634,44 @@ impl Peer {
         }
         send_msg.set_message(msg);
 
+        let to_leader = to_peer_id == self.leader_id();
+        let is_snapshot_msg = msg_type == eraftpb::MessageType::MsgSnapshot;
+
         let res = if !self.is_leader() {
-            trans.maybe_cache_send(send_msg)
+            trans.maybe_cache_send(send_msg, to_leader, is_snapshot_msg)
         } else {
             trans.send(send_msg)
         };
-        self.handle_send_result(msg_type, to_peer_id, to_store_id, res);
+
+        if let Err(err) = res {
+            warn!(
+                "failed to send msg to other peer";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "target_peer_id" => to_peer_id,
+                "target_store_id" => to_store_id,
+                "err" => ?err,
+            );
+            self.on_send_err(
+                to_leader,
+                is_snapshot_msg,
+                to_peer_id
+            );
+        };
     }
 
-    pub fn handle_send_result(
+    pub fn on_send_err(
         &mut self,
-        msg_type: eraftpb::MessageType,
+        leader_unreachable: bool,
+        is_snapshot_msg: bool,
         to_peer_id: u64,
-        to_store_id: u64,
-        result: Result<()>,
     ) {
-        let err = if let Err(err) = result {
-            err
-        } else {
-            return;
-        };
-        warn!(
-            "failed to send msg to other peer";
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-            "target_peer_id" => to_peer_id,
-            "target_store_id" => to_store_id,
-            "err" => ?err,
-        );
-        if to_peer_id == self.leader_id() {
+        if leader_unreachable {
             self.leader_unreachable = true;
         }
         // unreachable store
         self.raft_group.report_unreachable(to_peer_id);
-        if msg_type == eraftpb::MessageType::MsgSnapshot {
+        if is_snapshot_msg {
             self.raft_group
                 .report_snapshot(to_peer_id, SnapshotStatus::Failure);
         }

@@ -2816,14 +2816,6 @@ impl ApplyFsm {
                         channel_timer = Some(start);
                     }
 
-                    for entry in apply.entries.iter().rev() {
-                        let t = match entry.get_entry_type() {
-                            EntryType::EntryNormal => 0,
-                            EntryType::EntryConfChange => 1,
-                            EntryType::EntryConfChangeV2 => 2,
-                        };
-                    }
-
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
