@@ -329,7 +329,8 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             kv_wb_last_keys: 0,
             last_applied_index: 0,
             committed_count: 0,
-            enable_sync_log: true/*cfg.sync_log*/,
+            // TODO: add metrics of kvdb sync events
+            enable_sync_log: true,
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
@@ -2908,7 +2909,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> PollHandler<ApplyFsm, Contro
                 }
                 _ => {}
             }
-            self.apply_ctx.enable_sync_log = true/*incoming.sync_log*/;
         }
     }
 

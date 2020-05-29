@@ -776,6 +776,14 @@ impl PeerStorage {
         let idx = snap.get_metadata().get_index();
         if idx < self.truncated_index() || idx < request_index {
             // stale snapshot, should generate again.
+            info!(
+                "snapshot is stale, generate again";
+                "region_id" => self.region.get_id(),
+                "peer_id" => self.peer_id,
+                "snap_index" => idx,
+                "truncated_index" => self.truncated_index(),
+                "request_index" => request_index,
+            );
             STORE_SNAPSHOT_VALIDATION_FAILURE_COUNTER.stale.inc();
             return false;
         }

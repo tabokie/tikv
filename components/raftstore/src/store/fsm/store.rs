@@ -229,7 +229,8 @@ impl<T: Transport + 'static> BlockableTransport<T> {
             return self.trans.send(msg);
         }
 
-        if msg.get_message().get_msg_type() == MessageType::MsgAppendResponse {
+        // TODO: direct-send more messages that not depend on syncing
+        if msg.get_message().get_msg_type() == MessageType::MsgHeartbeat {
             self.trans.send(msg)
         } else {
             let to_peer_id = msg.get_to_peer().get_id();
@@ -623,11 +624,10 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         fail_point!("raft_between_save");
         let mut sync = self.poll_ctx.sync_log;
         if !sync {
-            if self.poll_ctx.trans.cached_count() > 8192 {
+            if self.poll_ctx.trans.cached_count() > 4096 {
                 self.poll_ctx.raft_metrics.sync_log_reason.trans_cache_is_full += 1;
                 sync = true;
             } else {
-                // TODO: use nano sec to calculate elapsed time
                 let last_sync_ts = self.poll_ctx.last_sync_ts_in_ns.load(Ordering::SeqCst);
                 let elapsed = Local::now().timestamp_nanos() - last_sync_ts;
                 if elapsed > self.poll_ctx.cfg.delay_sync_ns as i64 {

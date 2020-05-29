@@ -1080,11 +1080,7 @@ impl Peer {
     /// Only apply existing logs has another benefit that we don't need to deal with snapshots
     /// that are older than apply index as apply index <= last index <= index of snapshot.
     pub fn can_early_apply(&self, term: u64, index: u64) -> bool {
-        if self.is_leader() {
-            self.get_store().synced_idx >= index && self.get_store().last_term() >= term
-        } else {
-            self.get_store().last_index() >= index && self.get_store().last_term() >= term
-        }
+        self.get_store().last_index() >= index && self.get_store().last_term() >= term
     }
 
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
@@ -1187,15 +1183,27 @@ impl Peer {
             }
         }
 
-        if ctx.cfg.delay_sync_ns == 0 {
+
+        let must_sync = if ctx.cfg.delay_sync_ns == 0 {
             ctx.raft_metrics.sync_log_reason.delay_sync_not_enabled += 1;
-            ctx.sync_log = true;
+            true
         } else if self.raft_group.has_must_sync_ready() {
             ctx.raft_metrics.sync_log_reason.must_sync_ready += 1;
+            true
+        } else {
+            false
+        };
+        if must_sync {
             ctx.sync_log = true;
+        }
+
+        // Committed log may not sync yet in this instance
+        let has_ready = if must_sync {
+            self.raft_group.has_ready_since(Some((self.last_applying_idx, None)))
+        } else {
+            self.raft_group.has_ready_since(Some((self.last_applying_idx, Some(self.get_store().synced_idx))))
         };
 
-        let has_ready = self.raft_group.has_ready_since(Some((self.last_applying_idx, None)));
         if !has_ready {
             // Generating snapshot task won't set ready for raft group.
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
@@ -1222,7 +1230,11 @@ impl Peer {
         };
         before_handle_raft_ready_1003();
 
-        let mut ready = self.raft_group.ready_since(self.last_applying_idx);
+        let mut ready = if must_sync {
+            self.raft_group.ready_since(self.last_applying_idx)
+        } else {
+            self.raft_group.ready_from_range(self.last_applying_idx, self.get_store().synced_idx)
+        };
 
         self.on_role_changed(ctx, &ready);
 
