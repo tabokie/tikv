@@ -392,6 +392,64 @@ impl RaftInvalidProposeMetrics {
         }
     }
 }
+
+/// The buffered metrics counters for raft sync log event.
+#[derive(Clone)]
+pub struct SyncLogReason {
+    pub delay_sync_not_enabled: u64,
+    pub must_sync_ready: u64,
+    pub trans_cache_is_full: u64,
+    pub reach_deadline: u64,
+    pub peer_storage_require: u64,
+}
+
+impl Default for SyncLogReason {
+    fn default() -> SyncLogReason {
+        SyncLogReason {
+            delay_sync_not_enabled: 0,
+            must_sync_ready: 0,
+            trans_cache_is_full: 0,
+            reach_deadline: 0,
+            peer_storage_require: 0,
+        }
+    }
+}
+
+impl SyncLogReason {
+    fn flush(&mut self) {
+        if self.delay_sync_not_enabled > 0 {
+            SYNC_LOG_REASON
+                .with_label_values(&["delay_sync_not_enabled"])
+                .inc_by(self.delay_sync_not_enabled as i64);
+            self.delay_sync_not_enabled = 0;
+        }
+        if self.must_sync_ready > 0 {
+            SYNC_LOG_REASON
+                .with_label_values(&["must_sync_ready"])
+                .inc_by(self.must_sync_ready as i64);
+            self.must_sync_ready = 0;
+        }
+        if self.trans_cache_is_full > 0 {
+            SYNC_LOG_REASON
+                .with_label_values(&["trans_cache_is_full"])
+                .inc_by(self.trans_cache_is_full as i64);
+            self.trans_cache_is_full = 0;
+        }
+        if self.reach_deadline > 0 {
+            SYNC_LOG_REASON
+                .with_label_values(&["reach_deadline"])
+                .inc_by(self.reach_deadline as i64);
+            self.reach_deadline = 0;
+        }
+        if self.peer_storage_require > 0 {
+            SYNC_LOG_REASON
+                .with_label_values(&["peer_storage_require"])
+                .inc_by(self.peer_storage_require as i64);
+            self.peer_storage_require = 0;
+        }
+    }
+}
+
 /// The buffered metrics counters for raft.
 #[derive(Clone)]
 pub struct RaftMetrics {
@@ -404,6 +462,7 @@ pub struct RaftMetrics {
     pub commit_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
+    pub sync_log_reason: SyncLogReason,
 }
 
 impl Default for RaftMetrics {
@@ -420,6 +479,7 @@ impl Default for RaftMetrics {
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
+            sync_log_reason: Default::default(),
         }
     }
 }
@@ -435,6 +495,7 @@ impl RaftMetrics {
         self.commit_log.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
+        self.sync_log_reason.flush();
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();

@@ -1188,19 +1188,14 @@ impl Peer {
         }
 
         let must_sync = if ctx.cfg.delay_sync_log {
-            let sync = self.raft_group.has_must_sync_ready();
-            if sync {
-                info!(
-                    "SSD-SH do_sync";
-                    "reason" => "has_must_sync_ready",
-                );
+            if self.raft_group.has_must_sync_ready() {
+                ctx.raft_metrics.sync_log_reason.must_sync_ready += 1;
+                true
+            } else {
+                false
             }
-            sync
         } else {
-            info!(
-                "SSD-SH do_sync";
-                "reason" => "delay_sync_not_enabled",
-            );
+            ctx.raft_metrics.sync_log_reason.delay_sync_not_enabled += 1;
             true
         };
 

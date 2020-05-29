@@ -242,10 +242,6 @@ impl ApplyCallback {
     }
 
     fn invoke_all(self, host: &CoprocessorHost) {
-        info!(
-            "SSD-HC callback";
-            "region_id" => self.region.get_id(),
-        );
         for (cb, mut resp) in self.cbs {
             host.post_apply(&self.region, &mut resp);
             if let Some(cb) = cb {
@@ -2700,13 +2696,6 @@ impl ApplyFsm {
             return;
         }
         let applied_index = self.delegate.apply_state.get_applied_index();
-        info!(
-            "SSD-SS handle_snapshot";
-            "region_id" => self.delegate.region_id(),
-            "peer_id" => self.delegate.id(),
-            "snap_task.commit_index()" => snap_task.commit_index(),
-            "applied_index" => applied_index,
-        );
         assert!(snap_task.commit_index() <= applied_index);
         let mut need_sync = apply_ctx
             .apply_res
@@ -2833,14 +2822,6 @@ impl ApplyFsm {
                             EntryType::EntryConfChange => 1,
                             EntryType::EntryConfChangeV2 => 2,
                         };
-                        info!(
-                            "SSD-HC apply_entry";
-                            "region_id" => self.delegate.region_id(),
-                            "peer_id" => self.delegate.id(),
-                            "index" => entry.get_index(),
-                            "term" => entry.get_term(),
-                            "type" => t,
-                        );
                     }
 
                     self.handle_apply(apply_ctx, apply);

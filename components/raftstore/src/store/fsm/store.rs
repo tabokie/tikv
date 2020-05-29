@@ -334,6 +334,9 @@ impl<T: Transport + 'static, C> HandleRaftReadyContext for PollContext<T, C> {
 
     #[inline]
     fn set_sync_log(&mut self, sync: bool) {
+        if !self.sync_log && sync {
+            self.raft_metrics.sync_log_reason.peer_storage_require += 1;
+        }
         self.sync_log = sync;
     }
 }
@@ -609,15 +612,12 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         let mut sync = self.poll_ctx.sync_log;
         if !sync {
             if self.poll_ctx.trans.cached_count() > 8192 {
-                info!(
-                    "SSD-SH do_sync";
-                    "reason" => "trans_too_many",
-                    "cached_count" => self.poll_ctx.trans.cached_count(),
-                );
+                self.poll_ctx.raft_metrics.sync_log_reason.trans_cache_is_full += 1;
                 sync = true;
             } else {
                 let elapsed = Instant::now().duration_since(self.poll_ctx.last_sync_time);
                 if elapsed > Duration::from_millis(self.poll_ctx.cfg.delay_ms) {
+                    self.poll_ctx.raft_metrics.sync_log_reason.reach_deadline += 1;
                     sync = true;
                 }
             }
