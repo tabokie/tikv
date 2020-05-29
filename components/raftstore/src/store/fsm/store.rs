@@ -631,6 +631,9 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 let last_sync_ts = self.poll_ctx.last_sync_ts_in_ns.load(Ordering::SeqCst);
                 let elapsed = Local::now().timestamp_nanos() - last_sync_ts;
                 if elapsed > self.poll_ctx.cfg.delay_sync_ns as i64 {
+                    // Update last sync time as soon as posible, to avoid extra sync by other threads
+                    self.poll_ctx.last_sync_ts_in_ns
+                        .store(Local::now().timestamp_nanos(), Ordering::Relaxed);
                     self.poll_ctx.raft_metrics.sync_log_reason.reach_deadline += 1;
                     sync = true;
                 }
@@ -662,7 +665,6 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 
         if sync {
             self.poll_ctx.trans.send_cached();
-            self.poll_ctx.last_sync_ts_in_ns.store(Local::now().timestamp_nanos(), Ordering::Relaxed);
             for region_id in self.poll_ctx.unsynced_regions.drain() {
                 self.poll_ctx.router.send(region_id, PeerMsg::Synced).unwrap();
             }
