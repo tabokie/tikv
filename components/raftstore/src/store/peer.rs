@@ -1187,27 +1187,15 @@ impl Peer {
             }
         }
 
-        let must_sync = if ctx.cfg.delay_sync_log {
-            if self.raft_group.has_must_sync_ready() {
-                ctx.raft_metrics.sync_log_reason.must_sync_ready += 1;
-                true
-            } else {
-                false
-            }
-        } else {
+        if ctx.cfg.delay_sync_ns == 0 {
             ctx.raft_metrics.sync_log_reason.delay_sync_not_enabled += 1;
-            true
-        };
-
-        if must_sync {
             ctx.sync_log = true;
-        }
-        let has_ready = if must_sync {
-            self.raft_group.has_ready_since(Some((self.last_applying_idx, None)))
-        } else {
-            self.raft_group.has_ready_since(Some((self.last_applying_idx, Some(self.get_store().synced_idx))))
+        } else if self.raft_group.has_must_sync_ready() {
+            ctx.raft_metrics.sync_log_reason.must_sync_ready += 1;
+            ctx.sync_log = true;
         };
 
+        let has_ready = self.raft_group.has_ready_since(Some((self.last_applying_idx, None)));
         if !has_ready {
             // Generating snapshot task won't set ready for raft group.
             if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
@@ -1234,11 +1222,7 @@ impl Peer {
         };
         before_handle_raft_ready_1003();
 
-        let mut ready = if must_sync {
-            self.raft_group.ready_since(self.last_applying_idx)
-        } else {
-            self.raft_group.ready_from_range(self.last_applying_idx, self.get_store().synced_idx)
-        };
+        let mut ready = self.raft_group.ready_since(self.last_applying_idx);
 
         self.on_role_changed(ctx, &ready);
 

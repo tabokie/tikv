@@ -320,7 +320,7 @@ pub struct PollContext<T: Transport + 'static, C: 'static> {
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
-    pub last_sync_ts_in_ms: Arc<AtomicI64>,
+    pub last_sync_ts_in_ns: Arc<AtomicI64>,
     pub unsynced_regions: HashSet<u64>,
 }
 
@@ -628,9 +628,9 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 sync = true;
             } else {
                 // TODO: use nano sec to calculate elapsed time
-                let last_sync_ts = self.poll_ctx.last_sync_ts_in_ms.load(Ordering::SeqCst);
-                let elapsed = Local::now().timestamp_millis() - last_sync_ts;
-                if elapsed > self.poll_ctx.cfg.delay_ms as i64 {
+                let last_sync_ts = self.poll_ctx.last_sync_ts_in_ns.load(Ordering::SeqCst);
+                let elapsed = Local::now().timestamp_nanos() - last_sync_ts;
+                if elapsed > self.poll_ctx.cfg.delay_sync_ns as i64 {
                     self.poll_ctx.raft_metrics.sync_log_reason.reach_deadline += 1;
                     sync = true;
                 }
@@ -662,7 +662,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 
         if sync {
             self.poll_ctx.trans.send_cached();
-            self.poll_ctx.last_sync_ts_in_ms.store(Local::now().timestamp_millis(), Ordering::Relaxed);
+            self.poll_ctx.last_sync_ts_in_ns.store(Local::now().timestamp_nanos(), Ordering::Relaxed);
             for region_id in self.poll_ctx.unsynced_regions.drain() {
                 self.poll_ctx.router.send(region_id, PeerMsg::Synced).unwrap();
             }
@@ -866,7 +866,7 @@ pub struct RaftPollerBuilder<T, C> {
     global_stat: GlobalStoreStat,
     pub engines: KvEngines<RocksEngine, RocksEngine>,
     applying_snap_count: Arc<AtomicUsize>,
-    last_sync_ts_in_ms: Arc<AtomicI64>,
+    last_sync_ts_in_ns: Arc<AtomicI64>,
 }
 
 impl<T, C> RaftPollerBuilder<T, C> {
@@ -1064,7 +1064,7 @@ where
             trans: BlockableTransport::new(
                 self.trans.clone(),
                 self.router.clone(),
-                self.cfg.value().delay_send_msg
+                self.cfg.value().delay_sync_ns != 0
             ),
             pd_client: self.pd_client.clone(),
             global_stat: self.global_stat.clone(),
@@ -1079,7 +1079,7 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
-            last_sync_ts_in_ms: self.last_sync_ts_in_ms.clone(),
+            last_sync_ts_in_ns: self.last_sync_ts_in_ns.clone(),
             unsynced_regions: HashSet::default(),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1184,7 +1184,7 @@ impl RaftBatchSystem {
             store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
             future_poller: workers.future_poller.sender().clone(),
-            last_sync_ts_in_ms: Arc::new(AtomicI64::new(Local::now().timestamp_millis())),
+            last_sync_ts_in_ns: Arc::new(AtomicI64::new(Local::now().timestamp_nanos())),
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();
