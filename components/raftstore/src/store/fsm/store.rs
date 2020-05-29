@@ -221,19 +221,12 @@ impl<T: Transport + 'static> BlockableTransport<T> {
             return self.trans.send(msg);
         }
 
-        //if msg.get_message().get_msg_type() == MessageType::MsgAppendResponse {
-        info!(
-            "SSD-MS cache raft msg";
-            "region_id" => msg.get_region_id(),
-            "from" => msg.get_from_peer().get_id(),
-            "to" => msg.get_to_peer().get_id(),
-            "t_i_id" => self.id,
-        );
-        self.cache.push(msg);
-        Ok(())
-        //} else {
-        //    self.trans.send(msg)
-        //}
+        if msg.get_message().get_msg_type() == MessageType::MsgAppendResponse {
+            self.trans.send(msg)
+        } else {
+            self.cache.push(msg);
+            Ok(())
+        }
     }
 
     pub fn cached_count(&self) -> usize {
@@ -244,22 +237,10 @@ impl<T: Transport + 'static> BlockableTransport<T> {
         if self.cache.len() == 0 {
             return;
         }
-        info!(
-            "SSD-MS start_send_cached";
-            "count" => self.cache.len(),
-            "t_i_id" => self.id,
-        );
         for msg in self.cache.drain(..) {
             let region_id = msg.get_region_id();
             let from_peer_id = msg.get_from_peer().get_id();
             let to_peer_id = msg.get_to_peer().get_id();
-            info!(
-                "SSD-MS send_cached";
-                "region_id" => region_id,
-                "from_peer" => from_peer_id,
-                "to_peer" => to_peer_id,
-                "thread_id" => self.id,
-            );
             let res = self.trans.send(msg);
             if let Err(err) = res {
                 // SSD-TODO: handle error: notifications, etc
@@ -577,10 +558,6 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         fail_point!("on_raft_ready", self.poll_ctx.store_id() == 3, |_| {});
         if !self.pending_proposals.is_empty() {
             for prop in self.pending_proposals.drain(..) {
-                info!(
-                    "SSD-HC proposal";
-                    "region_id" => prop.region_id,
-                );
                 self.poll_ctx
                     .apply_router
                     .schedule_task(prop.region_id, ApplyTask::Proposal(prop));
@@ -631,7 +608,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         fail_point!("raft_between_save");
         let mut sync = self.poll_ctx.sync_log;
         if !sync {
-            if self.poll_ctx.trans.cached_count() > 10240 {
+            if self.poll_ctx.trans.cached_count() > 8192 {
                 info!(
                     "SSD-SH do_sync";
                     "reason" => "trans_too_many",
@@ -641,11 +618,6 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             } else {
                 let elapsed = Instant::now().duration_since(self.poll_ctx.last_sync_time);
                 if elapsed > Duration::from_millis(self.poll_ctx.cfg.delay_ms) {
-                    info!(
-                        "SSD-SH do_sync";
-                        "reason" => "last_sync_too_long",
-                        "elapsed_ms" => elapsed.as_millis(),
-                    );
                     sync = true;
                 }
             }
@@ -678,10 +650,6 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             self.poll_ctx.trans.send_cached();
             self.poll_ctx.last_sync_time = Instant::now();
             for region_id in self.poll_ctx.unsynced_regions.drain() {
-                info!(
-                    "SSD-UU send_synced_notification";
-                    "region_id" => region_id,
-                );
                 self.poll_ctx.router.send(region_id, PeerMsg::Synced).unwrap();
             }
         }
@@ -699,20 +667,10 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 }
                 PeerFsmDelegate::new(&mut peers[batch_pos], &mut self.poll_ctx)
                     .post_raft_ready_append(ready, invoke_ctx);
-                peers[batch_pos].peer.maybe_on_sync(sync);
-                if !sync {
-                    if self.poll_ctx.unsynced_regions.contains(&region_id) {
-                        info!(
-                            "SSD-UU insert_unsynced_but_exists";
-                            "region_id" => region_id,
-                        );
-                    } else {
-                        info!(
-                            "SSD-UU unsynced_regions_insert";
-                            "region_id" => region_id,
-                        );
-                        self.poll_ctx.unsynced_regions.insert(region_id);
-                    }
+                if sync {
+                    peers[batch_pos].peer.on_sync();
+                } else {
+                    self.poll_ctx.unsynced_regions.insert(region_id);
                 }
             }
         }
@@ -748,7 +706,6 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 
 impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for RaftPoller<T, C> {
     fn begin(&mut self, batch_size: usize) {
-        info!("SSD-BS BEGIN");
         self.previous_metrics = self.poll_ctx.raft_metrics.clone();
         self.poll_ctx.pending_count = 0;
         self.poll_ctx.sync_log = false;

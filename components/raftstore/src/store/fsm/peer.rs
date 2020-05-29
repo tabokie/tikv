@@ -314,13 +314,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
                 PeerMsg::Noop => {}
-                PeerMsg::Synced => {
-                    info!(
-                        "SSD-UU received_synced_notification";
-                        "region_id" => self.fsm.peer.region().get_id(),
-                    );
-                    self.fsm.peer.maybe_on_sync(true);
-                }
+                PeerMsg::Synced => self.fsm.peer.on_sync(),
             }
         }
     }
@@ -617,13 +611,6 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     committed_len = v.len()
                 }
             }
-            info!(
-                "SSD-RD new ready";
-                "region_id" => self.fsm.peer.region().get_id(),
-                "peer_id" => self.fsm.peer.peer_id(),
-                "is_leader" => self.fsm.peer.is_leader(),
-                "committed_len" => committed_len,
-            );
             self.ctx.ready_res.push(r);
         }
     }

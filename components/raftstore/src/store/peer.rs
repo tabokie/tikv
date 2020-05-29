@@ -964,27 +964,9 @@ impl Peer {
         }
     }
 
-    pub fn maybe_on_sync(&mut self, synced: bool) {
-        info!(
-            "SSD-SI maybe_on_sync";
-            "region_id" => self.region().get_id(),
-            "peer_id" => self.peer_id(),
-            "synced" => synced,
-            "prev synced_idx" => self.get_store().synced_idx,
-            "curr last_index" => self.get_store().last_index(),
-            "curr committed" => self.raft_group.raft.raft_log.committed,
-            "last_applying_idx" => self.last_applying_idx,
-        );
-        if synced {
-            self.raft_group.raft.on_sync();
-            self.mut_store().on_sync();
-            info!(
-                "SSD-SI maybe_on_sync set synced_idx";
-                "region_id" => self.region().get_id(),
-                "peer_id" => self.peer_id(),
-                "synced_idx" => self.get_store().synced_idx,
-            );
-        }
+    pub fn on_sync(&mut self) {
+        self.raft_group.raft.on_sync();
+        self.mut_store().on_sync();
     }
 
     #[inline]
@@ -1055,16 +1037,6 @@ impl Peer {
 
     // Check if this peer can handle request_snapshot.
     pub fn ready_to_handle_request_snapshot(&mut self, request_index: u64) -> bool {
-        info!(
-            "SSD-SS check handle snapshot";
-            "region_id" => self.region().get_id(),
-            "peer_id" => self.peer_id(),
-            "request_index" => request_index,
-            "store.applied_index" => self.get_store().applied_index(),
-            "store.last_index" => self.get_store().last_index(),
-            "peer.last_applying_index" => self.last_applying_idx,
-            "peer.sync_index" => self.get_store().synced_idx,
-        );
         let reject_reason = if !self.is_leader() {
             // Only leader can handle request snapshot.
             "not_leader"
@@ -1107,16 +1079,12 @@ impl Peer {
     ///
     /// Only apply existing logs has another benefit that we don't need to deal with snapshots
     /// that are older than apply index as apply index <= last index <= index of snapshot.
-    pub fn can_early_apply(&self, _term: u64, _index: u64) -> bool {
-        // SSD-TODO
-        /*
+    pub fn can_early_apply(&self, term: u64, index: u64) -> bool {
         if self.is_leader() {
             self.get_store().synced_idx >= index && self.get_store().last_term() >= term
         } else {
             self.get_store().last_index() >= index && self.get_store().last_term() >= term
         }
-        */
-        return false;
     }
 
     pub fn take_apply_proposals(&mut self) -> Option<RegionProposal> {
@@ -1220,14 +1188,6 @@ impl Peer {
         }
 
         let must_sync = if ctx.cfg.delay_sync_log {
-            info!(
-                "SSD-SI check_has_must_sync_ready";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "apply_index" => self.get_store().applied_index(),
-                "last_applying_index" => self.last_applying_idx,
-                "synced_index" => self.get_store().synced_idx,
-            );
             let sync = self.raft_group.has_must_sync_ready();
             if sync {
                 info!(
@@ -1306,18 +1266,6 @@ impl Peer {
             self.send(&mut ctx.trans, msgs, &mut ctx.raft_metrics.message);
         }
 
-        info!(
-            "SSD-RD peer_handle_ready";
-            "is_leader" => self.is_leader(),
-            "region_id" => self.region_id,
-            "peer_id" => self.peer.get_id(),
-            "must_sync" => ready.must_sync(),
-            "msg_len" => ready.messages.len(),
-            "entries" => ready.entries().len(),
-            "entries_index" => ready.entries().last().map_or(0, |x| x.get_index()),
-            "committed_entries" => ready.committed_entries.as_ref().map_or(0, Vec::len),
-            "committed_entries_index" => ready.committed_entries.as_ref().map_or(0, |v| v.last().map_or(0, |x| x.get_index())),
-        );
         let invoke_ctx = match self.mut_store().handle_raft_ready(ctx, &ready) {
             Ok(r) => r,
             Err(e) => {
@@ -1488,25 +1436,6 @@ impl Peer {
                     term,
                     committed_index,
                 );
-
-                /*
-                for entry in apply.entries.iter().rev() {
-                    let t = match entry.get_entry_type() {
-                        EntryType::EntryNormal => 0,
-                        EntryType::EntryConfChange => 1,
-                        EntryType::EntryConfChangeV2 => 2,
-                    };
-                    info!(
-                        "SSD-HC send_entry_to_apply";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                        "index" => entry.get_index(),
-                        "term" => entry.get_term(),
-                        "type" => t,
-                    );
-                }
-                */
-
                 ctx.apply_router
                     .schedule_task(self.region_id, ApplyTask::apply(apply));
             }
