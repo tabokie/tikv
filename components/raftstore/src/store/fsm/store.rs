@@ -230,7 +230,9 @@ impl<T: Transport + 'static> BlockableTransport<T> {
         }
 
         // TODO: direct-send more messages that not depend on syncing
-        if msg.get_message().get_msg_type() == MessageType::MsgHeartbeat {
+        let msg_type = msg.get_message().get_msg_type();
+        if msg_type == MessageType::MsgHeartbeat ||
+            msg_type == MessageType::MsgHeartbeatResponse {
             self.trans.send(msg)
         } else {
             let to_peer_id = msg.get_to_peer().get_id();
