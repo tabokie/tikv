@@ -1185,10 +1185,14 @@ impl Peer {
 
 
         let must_sync = if ctx.cfg.delay_sync_ns == 0 {
-            ctx.raft_metrics.sync_log_reason.delay_sync_not_enabled += 1;
+            if !ctx.sync_log {
+                ctx.raft_metrics.sync_log_reason.delay_sync_not_enabled += 1;
+            }
             true
         } else if self.raft_group.has_must_sync_ready() {
-            ctx.raft_metrics.sync_log_reason.must_sync_ready += 1;
+            if !ctx.sync_log {
+                ctx.raft_metrics.sync_log_reason.must_sync_ready += 1;
+            }
             true
         } else {
             false
