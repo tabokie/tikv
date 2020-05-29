@@ -21,7 +21,7 @@ use std::cmp::{Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::ops::Deref;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{mem, thread, u64};
@@ -69,6 +69,7 @@ use tikv_util::time::{duration_to_sec, Instant as TiInstant};
 use tikv_util::timer::SteadyTimer;
 use tikv_util::worker::{FutureScheduler, FutureWorker, Scheduler, Worker};
 use tikv_util::{is_zero_duration, sys as sys_util, Either, RingQueue};
+use chrono::prelude::Local;
 
 type Key = Vec<u8>;
 
@@ -319,7 +320,7 @@ pub struct PollContext<T: Transport + 'static, C: 'static> {
     pub need_flush_trans: bool,
     pub queued_snapshot: HashSet<u64>,
     pub current_time: Option<Timespec>,
-    pub last_sync_time: Instant,
+    pub last_sync_ts_in_ms: Arc<AtomicI64>,
     pub unsynced_regions: HashSet<u64>,
 }
 
@@ -626,8 +627,10 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 self.poll_ctx.raft_metrics.sync_log_reason.trans_cache_is_full += 1;
                 sync = true;
             } else {
-                let elapsed = Instant::now().duration_since(self.poll_ctx.last_sync_time);
-                if elapsed > Duration::from_millis(self.poll_ctx.cfg.delay_ms) {
+                // TODO: use nano sec to calculate elapsed time
+                let last_sync_ts = self.poll_ctx.last_sync_ts_in_ms.load(Ordering::SeqCst);
+                let elapsed = Local::now().timestamp_millis() - last_sync_ts;
+                if elapsed > self.poll_ctx.cfg.delay_ms as i64 {
                     self.poll_ctx.raft_metrics.sync_log_reason.reach_deadline += 1;
                     sync = true;
                 }
@@ -659,7 +662,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
 
         if sync {
             self.poll_ctx.trans.send_cached();
-            self.poll_ctx.last_sync_time = Instant::now();
+            self.poll_ctx.last_sync_ts_in_ms.store(Local::now().timestamp_millis(), Ordering::Relaxed);
             for region_id in self.poll_ctx.unsynced_regions.drain() {
                 self.poll_ctx.router.send(region_id, PeerMsg::Synced).unwrap();
             }
@@ -863,6 +866,7 @@ pub struct RaftPollerBuilder<T, C> {
     global_stat: GlobalStoreStat,
     pub engines: KvEngines<RocksEngine, RocksEngine>,
     applying_snap_count: Arc<AtomicUsize>,
+    last_sync_ts_in_ms: Arc<AtomicI64>,
 }
 
 impl<T, C> RaftPollerBuilder<T, C> {
@@ -1075,7 +1079,7 @@ where
             need_flush_trans: false,
             queued_snapshot: HashSet::default(),
             current_time: None,
-            last_sync_time: Instant::now(),
+            last_sync_ts_in_ms: self.last_sync_ts_in_ms.clone(),
             unsynced_regions: HashSet::default(),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1180,6 +1184,7 @@ impl RaftBatchSystem {
             store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
             future_poller: workers.future_poller.sender().clone(),
+            last_sync_ts_in_ms: Arc::new(AtomicI64::new(Local::now().timestamp_millis())),
         };
         let region_peers = builder.init()?;
         let engine = builder.engines.kv.clone();

@@ -38,6 +38,7 @@ batch-system = { path = "../batch-system" }
 bitflags = "1.0.1"
 byteorder = "1.2"
 configuration = { path = "../configuration" }
+chrono = "0.4"
 crc32fast = "1.2"
 crossbeam = "0.7.2"
 engine_rocks = { path = "../engine_rocks" }
