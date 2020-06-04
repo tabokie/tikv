@@ -2968,7 +2968,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.6.0-alpha"
-source = "git+https://github.com/innerr/raft-rs?branch=ssd#2b033a9d0333fdb19f8ea9965478d67c6afd3199"
+source = "git+https://github.com/pingcap/raft-rs?branch=ssd#2cee8cc737bc832ea31589f1422b0fa33845d1ba"
 dependencies = [
  "fxhash",
  "getset",
@@ -2982,7 +2982,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.6.0-alpha"
-source = "git+https://github.com/innerr/raft-rs?branch=ssd#2b033a9d0333fdb19f8ea9965478d67c6afd3199"
+source = "git+https://github.com/pingcap/raft-rs?branch=ssd#2cee8cc737bc832ea31589f1422b0fa33845d1ba"
 dependencies = [
  "lazy_static",
  "prost",
@@ -2997,6 +2997,7 @@ dependencies = [
  "batch-system",
  "bitflags",
  "byteorder",
+ "chrono",
  "configuration",
  "crc32fast",
  "crossbeam",
@@ -3023,7 +3024,6 @@ dependencies = [
  "protobuf",
  "quick-error",
  "raft",
- "rand 0.7.3",
  "serde",
  "serde_derive",
  "slog",

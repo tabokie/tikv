@@ -964,9 +964,9 @@ impl Peer {
         }
     }
 
-    pub fn on_sync(&mut self) {
-        self.raft_group.raft.on_sync();
-        self.mut_store().on_sync();
+    pub fn on_sync(&mut self, idx: u64) {
+        self.raft_group.raft.on_sync(idx);
+        self.mut_store().on_sync(idx);
     }
 
     #[inline]
