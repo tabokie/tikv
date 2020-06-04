@@ -624,8 +624,8 @@ impl PeerStorage {
         ))
     }
 
-    pub fn on_sync(&mut self) {
-        self.synced_idx = self.last_index();
+    pub fn on_sync(&mut self, idx: u64) {
+        self.synced_idx = idx;
     }
 
     fn check_range(&self, low: u64, high: u64) -> raft::Result<()> {

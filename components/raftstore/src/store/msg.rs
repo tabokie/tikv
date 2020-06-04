@@ -324,7 +324,7 @@ pub enum PeerMsg<E: KvEngine> {
     CasualMessage(CasualMessage<E>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
-    Synced,
+    Synced(u64),
     AsyncMsgFailed(PeerMsgIrrelevantInfo),
 }
 
@@ -350,7 +350,7 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
-            PeerMsg::Synced => write!(fmt, "Synced"),
+            PeerMsg::Synced(idx) => write!(fmt, "Synced {:?}", idx),
             PeerMsg::AsyncMsgFailed(info) => write!(fmt,
                 "ToPeerI {:?}, ToLeader {:?}, IsSnapshotMsg {:?}",
                 info.to_peer_id,

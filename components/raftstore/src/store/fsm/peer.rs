@@ -314,7 +314,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     }
                 }
                 PeerMsg::Noop => {}
-                PeerMsg::Synced => self.fsm.peer.on_sync(),
+                PeerMsg::Synced(idx) => self.fsm.peer.on_sync(idx),
                 PeerMsg::AsyncMsgFailed(info) => self.fsm.peer.on_send_err(
                     info.to_leader,
                     info.is_snapshot_msg,
