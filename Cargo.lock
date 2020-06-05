@@ -3014,6 +3014,7 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "libc",
  "log",
  "log_wrappers",
  "panic_hook",
