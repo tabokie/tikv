@@ -629,6 +629,8 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         let current_ts = Local::now().timestamp_nanos() as i64;
         if !sync {
             if self.poll_ctx.trans.cached_count() > 4096 {
+                let elapsed = current_ts - self.poll_ctx.global_last_sync_ts_in_ns.load(Ordering::SeqCst);
+                self.poll_ctx.raft_metrics.sync_log_interval.observe(elapsed as f64 / 1_000_000_000.0);
                 self.poll_ctx
                     .raft_metrics
                     .sync_log_reason
@@ -648,6 +650,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 }
                 let elapsed = current_ts - last_sync_ts;
                 if elapsed > self.poll_ctx.cfg.delay_sync_ns as i64 {
+                    self.poll_ctx.raft_metrics.sync_log_interval.observe(elapsed as f64 / 1_000_000_000.0);
                     self.poll_ctx.raft_metrics.sync_log_reason.reach_deadline += 1;
                     sync = true;
                 }
@@ -677,7 +680,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         }
         fail_point!("raft_after_save");
 
-        if sync {
+        if sync && self.poll_ctx.cfg.delay_sync_ns != 0 {
             self.poll_ctx
                 .global_last_sync_ts_in_ns
                 .store(current_ts, Ordering::Relaxed);
@@ -847,7 +850,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
     fn end(&mut self, peers: &mut [Box<PeerFsm<RocksEngine>>]) {
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
-        } else {
+        } else if self.poll_ctx.cfg.delay_sync_ns != 0 {
             let last_sync_ts = self.poll_ctx.global_last_sync_ts_in_ns.load(Ordering::SeqCst);
             let elapsed =  Local::now().timestamp_nanos() - last_sync_ts;
             // wait it a little bit longer, because it's better to let others threads with actual write to trigger fsync
@@ -863,8 +866,9 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
                     .global_last_sync_ts_in_ns
                     .store(current_ts, Ordering::Relaxed);
                 self.poll_ctx.local_last_sync_ts_in_ns = current_ts; 
-                self.poll_ctx.raft_metrics.sync_log_reason.reach_deadline += 1;
-                self.poll_ctx.trans.send_cached(); // should send all cache
+                self.poll_ctx.raft_metrics.sync_log_reason.reach_deadline_without_ready += 1;
+                self.poll_ctx.raft_metrics.sync_log_interval.observe(elapsed as f64 / 1_000_000_000.0);
+                self.poll_ctx.trans.send_cached();
                 for (region_id, idx) in self.poll_ctx.unsynced_regions.drain() {
                     self.poll_ctx
                         .router
