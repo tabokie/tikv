@@ -627,7 +627,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
         fail_point!("raft_between_save");
         let mut sync = self.poll_ctx.sync_log;
         let current_ts = timespec_to_nanos(TiInstant::now_coarse());
-        if !sync {
+        if !sync { // if delay_sync_ns == 0, sync must be true
             if self.poll_ctx.trans.cached_count() > 4096 {
                 let elapsed = current_ts - self.poll_ctx.global_last_sync_time.load(Ordering::SeqCst);
                 self.poll_ctx.raft_metrics.sync_log_interval.observe(elapsed as f64 / 1_000_000_000.0);
@@ -653,6 +653,8 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                     self.poll_ctx.raft_metrics.sync_log_interval.observe(elapsed as f64 / 1_000_000_000.0);
                     self.poll_ctx.raft_metrics.sync_log_reason.reach_deadline += 1;
                     sync = true;
+                } else {
+                    self.poll_ctx.raft_metrics.sync_log_reason.not_reach_deadline += 1;
                 }
             }
         }

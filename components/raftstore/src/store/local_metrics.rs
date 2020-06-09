@@ -402,6 +402,7 @@ pub struct SyncLogReason {
     pub reach_deadline: u64,
     pub reach_deadline_without_ready: u64,
     pub peer_storage_require: u64,
+    pub not_reach_deadline: u64,
 }
 
 impl Default for SyncLogReason {
@@ -412,6 +413,7 @@ impl Default for SyncLogReason {
             trans_cache_is_full: 0,
             reach_deadline: 0,
             reach_deadline_without_ready: 0,
+            not_reach_deadline: 0,
             peer_storage_require: 0,
         }
     }
@@ -448,6 +450,12 @@ impl SyncLogReason {
                 .with_label_values(&["reach_deadline_without_ready"])
                 .inc_by(self.reach_deadline_without_ready as i64);
             self.reach_deadline_without_ready = 0;
+        }
+        if self.not_reach_deadline > 0 {
+            SYNC_LOG_REASON
+                .with_label_values(&["not_reach_deadline"])
+                .inc_by(self.not_reach_deadline as i64);
+            self.not_reach_deadline = 0;
         }
         if self.peer_storage_require > 0 {
             SYNC_LOG_REASON
