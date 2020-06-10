@@ -872,7 +872,29 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
     fn pause(&mut self) {
         if self.poll_ctx.cfg.delay_sync_ns != 0 {
             std::thread::sleep(std::time::Duration::from_nanos(self.poll_ctx.cfg.delay_sync_ns));
-            self.check_sync();
+            if !self.check_sync() && (self.poll_ctx.trans.cached_count() != 0 || self.poll_ctx.unsynced_regions.len() != 0) {
+                let last_sync_ts = self.poll_ctx.global_last_sync_time.load(Ordering::SeqCst);
+                let current_ts = timespec_to_nanos(TiInstant::now_coarse());
+                let elapsed = current_ts - last_sync_ts;
+                unsafe {
+                    libc::sync();
+                }
+                // should update global_last_sync_time after sync is finished,
+                // or other threads would commit an unsynced log entry.
+                self.poll_ctx
+                    .global_last_sync_time
+                    .store(current_ts, Ordering::Relaxed);
+                self.poll_ctx.local_last_sync_time = current_ts;
+                self.poll_ctx.raft_metrics.sync_log_reason.reach_deadline_without_ready += 1;
+                self.poll_ctx.raft_metrics.sync_log_interval.observe(elapsed as f64 / 1_000_000_000.0);
+                self.poll_ctx.trans.send_cached();
+                for (region_id, idx) in self.poll_ctx.unsynced_regions.drain() {
+                    self.poll_ctx
+                        .router
+                        .send(region_id, PeerMsg::Synced(idx))
+                        .unwrap();
+                }
+            }
         }
         if self.poll_ctx.need_flush_trans {
             self.poll_ctx.trans.flush();
@@ -882,7 +904,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksEngine>, StoreFsm> for 
 }
 
 impl<T: Transport, C: PdClient> RaftPoller<T, C> {
-    fn check_sync(&mut self) {
+    fn check_sync(&mut self) -> bool {
         let last_sync_ts = self.poll_ctx.global_last_sync_time.load(Ordering::SeqCst);
         let current_ts = timespec_to_nanos(TiInstant::now_coarse());
         let elapsed = current_ts - last_sync_ts;
@@ -907,6 +929,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                     .send(region_id, PeerMsg::Synced(idx))
                     .unwrap();
             }
+            return true;
         } else if last_sync_ts > self.poll_ctx.local_last_sync_time {
             self.poll_ctx.local_last_sync_time = last_sync_ts;
             self.poll_ctx.trans.send_cached();
@@ -916,7 +939,9 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                     .send(region_id, PeerMsg::Synced(idx))
                     .unwrap();
             }
+            return true;
         }
+        return false;
     }
 }
 
