@@ -427,6 +427,6 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_sync_log_interval_seconds",
             "Bucketed histogram of sync log interval",
-            exponential_buckets(0.0005, 2.0, 20).unwrap()
+            exponential_buckets(0.0001, 2.0, 20).unwrap()
         ).unwrap();
 }
