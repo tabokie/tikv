@@ -400,7 +400,9 @@ pub struct SyncLogReason {
     pub must_sync_ready: u64,
     pub trans_cache_is_full: u64,
     pub reach_deadline: u64,
+    pub reach_deadline_without_ready: u64,
     pub peer_storage_require: u64,
+    pub not_reach_deadline: u64,
 }
 
 impl Default for SyncLogReason {
@@ -410,6 +412,8 @@ impl Default for SyncLogReason {
             must_sync_ready: 0,
             trans_cache_is_full: 0,
             reach_deadline: 0,
+            reach_deadline_without_ready: 0,
+            not_reach_deadline: 0,
             peer_storage_require: 0,
         }
     }
@@ -441,6 +445,18 @@ impl SyncLogReason {
                 .inc_by(self.reach_deadline as i64);
             self.reach_deadline = 0;
         }
+        if self.reach_deadline_without_ready > 0 {
+            SYNC_LOG_REASON
+                .with_label_values(&["reach_deadline_without_ready"])
+                .inc_by(self.reach_deadline_without_ready as i64);
+            self.reach_deadline_without_ready = 0;
+        }
+        if self.not_reach_deadline > 0 {
+            SYNC_LOG_REASON
+                .with_label_values(&["not_reach_deadline"])
+                .inc_by(self.not_reach_deadline as i64);
+            self.not_reach_deadline = 0;
+        }
         if self.peer_storage_require > 0 {
             SYNC_LOG_REASON
                 .with_label_values(&["peer_storage_require"])
@@ -463,6 +479,7 @@ pub struct RaftMetrics {
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
     pub sync_log_reason: SyncLogReason,
+    pub sync_log_interval: LocalHistogram,
 }
 
 impl Default for RaftMetrics {
@@ -480,6 +497,7 @@ impl Default for RaftMetrics {
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
             sync_log_reason: Default::default(),
+            sync_log_interval: PEER_SYNC_LOG_INTERVAL_HISTOGRAM.local(),
         }
     }
 }
@@ -496,6 +514,7 @@ impl RaftMetrics {
         self.message_dropped.flush();
         self.invalid_proposal.flush();
         self.sync_log_reason.flush();
+        self.sync_log_interval.flush();
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();

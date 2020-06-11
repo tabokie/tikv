@@ -423,4 +423,10 @@ lazy_static! {
             &["reason"]
         )
         .unwrap();
+    pub static ref PEER_SYNC_LOG_INTERVAL_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_sync_log_interval_seconds",
+            "Bucketed histogram of sync log interval",
+            exponential_buckets(0.0001, 2.0, 20).unwrap()
+        ).unwrap();
 }
