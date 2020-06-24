@@ -885,7 +885,11 @@ impl PeerStorage {
         let (tx, rx) = mpsc::sync_channel(1);
         *snap_state = SnapState::Generating(rx);
 
-        let task = GenSnapTask::new(self.region.get_id(), cmp::min(self.committed_index(), self.synced_idx), tx);
+        let task = GenSnapTask::new(
+            self.region.get_id(),
+            cmp::min(self.committed_index(), self.synced_idx),
+            tx,
+        );
         let mut gen_snap_task = self.gen_snap_task.borrow_mut();
         assert!(gen_snap_task.is_none());
         *gen_snap_task = Some(task);

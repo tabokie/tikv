@@ -14,7 +14,7 @@ use time::{Duration, Timespec};
 
 use super::peer_storage;
 use crate::{Error, Result};
-use tikv_util::time::{Instant, monotonic_raw_now};
+use tikv_util::time::{monotonic_raw_now, Instant};
 use tikv_util::Either;
 
 pub fn find_peer(region: &metapb::Region, store_id: u64) -> Option<&metapb::Peer> {

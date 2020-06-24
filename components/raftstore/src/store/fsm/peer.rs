@@ -318,11 +318,11 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.fsm.peer.on_sync(idx);
                     self.fsm.has_ready = true;
                 }
-                PeerMsg::AsyncMsgFailed(info) => self.fsm.peer.on_send_err(
-                    info.to_leader,
-                    info.is_snapshot_msg,
-                    info.to_peer_id
-                ),
+                PeerMsg::AsyncMsgFailed(info) => {
+                    self.fsm
+                        .peer
+                        .on_send_err(info.to_leader, info.is_snapshot_msg, info.to_peer_id)
+                }
             }
         }
     }
@@ -1442,6 +1442,10 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
             // data too.
             panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
         }
+        self.ctx.raft_metrics.sync_events.sync_raftdb_peer_destroy += 1;
+        self.ctx.raft_metrics.sync_events.sync_raftdb_count += 1;
+        self.ctx.raft_metrics.sync_events.sync_kvdb_peer_destroy += 1;
+        self.ctx.raft_metrics.sync_events.sync_kvdb_count += 1;
         self.ctx.router.close(region_id);
         self.fsm.stop();
 

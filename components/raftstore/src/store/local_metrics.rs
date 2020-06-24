@@ -395,73 +395,105 @@ impl RaftInvalidProposeMetrics {
 
 /// The buffered metrics counters for raft sync log event.
 #[derive(Clone)]
-pub struct SyncLogReason {
-    pub delay_sync_not_enabled: u64,
-    pub must_sync_ready: u64,
-    pub trans_cache_is_full: u64,
-    pub reach_deadline: u64,
-    pub reach_deadline_without_ready: u64,
-    pub peer_storage_require: u64,
-    pub not_reach_deadline: u64,
+pub struct SyncEvents {
+    pub sync_raftdb_count: u64,
+    pub sync_raftdb_reach_deadline: u64,
+    pub sync_raftdb_reach_deadline_no_ready: u64,
+    pub raftdb_skipped_sync_count: u64,
+    pub sync_raftdb_ready_must_sync: u64,
+    pub sync_raftdb_trans_cache_is_full: u64,
+    pub sync_raftdb_peer_storage_require: u64,
+    pub sync_raftdb_peer_destroy: u64,
+    pub sync_kvdb_count: u64,
+    pub sync_kvdb_ready_must_sync: u64,
+    pub sync_kvdb_peer_destroy: u64,
 }
 
-impl Default for SyncLogReason {
-    fn default() -> SyncLogReason {
-        SyncLogReason {
-            delay_sync_not_enabled: 0,
-            must_sync_ready: 0,
-            trans_cache_is_full: 0,
-            reach_deadline: 0,
-            reach_deadline_without_ready: 0,
-            not_reach_deadline: 0,
-            peer_storage_require: 0,
+impl Default for SyncEvents {
+    fn default() -> SyncEvents {
+        SyncEvents {
+            sync_raftdb_count: 0,
+            sync_raftdb_reach_deadline: 0,
+            sync_raftdb_reach_deadline_no_ready: 0,
+            raftdb_skipped_sync_count: 0,
+            sync_raftdb_ready_must_sync: 0,
+            sync_raftdb_trans_cache_is_full: 0,
+            sync_raftdb_peer_storage_require: 0,
+            sync_raftdb_peer_destroy: 0,
+            sync_kvdb_count: 0,
+            sync_kvdb_ready_must_sync: 0,
+            sync_kvdb_peer_destroy: 0,
         }
     }
 }
 
-impl SyncLogReason {
+impl SyncEvents {
     fn flush(&mut self) {
-        if self.delay_sync_not_enabled > 0 {
-            SYNC_LOG_REASON
-                .with_label_values(&["delay_sync_not_enabled"])
-                .inc_by(self.delay_sync_not_enabled as i64);
-            self.delay_sync_not_enabled = 0;
+        if self.sync_raftdb_count > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_count"])
+                .inc_by(self.sync_raftdb_count as i64);
+            self.sync_raftdb_count = 0;
         }
-        if self.must_sync_ready > 0 {
-            SYNC_LOG_REASON
-                .with_label_values(&["must_sync_ready"])
-                .inc_by(self.must_sync_ready as i64);
-            self.must_sync_ready = 0;
+        if self.sync_raftdb_reach_deadline > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_reach_deadline"])
+                .inc_by(self.sync_raftdb_reach_deadline as i64);
+            self.sync_raftdb_reach_deadline = 0;
         }
-        if self.trans_cache_is_full > 0 {
-            SYNC_LOG_REASON
-                .with_label_values(&["trans_cache_is_full"])
-                .inc_by(self.trans_cache_is_full as i64);
-            self.trans_cache_is_full = 0;
+        if self.sync_raftdb_reach_deadline_no_ready > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_reach_deadline_no_ready"])
+                .inc_by(self.sync_raftdb_reach_deadline_no_ready as i64);
+            self.sync_raftdb_reach_deadline_no_ready = 0;
         }
-        if self.reach_deadline > 0 {
-            SYNC_LOG_REASON
-                .with_label_values(&["reach_deadline"])
-                .inc_by(self.reach_deadline as i64);
-            self.reach_deadline = 0;
+        if self.raftdb_skipped_sync_count > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["raftdb_skipped_sync_count"])
+                .inc_by(self.raftdb_skipped_sync_count as i64);
+            self.raftdb_skipped_sync_count = 0;
         }
-        if self.reach_deadline_without_ready > 0 {
-            SYNC_LOG_REASON
-                .with_label_values(&["reach_deadline_without_ready"])
-                .inc_by(self.reach_deadline_without_ready as i64);
-            self.reach_deadline_without_ready = 0;
+        if self.sync_raftdb_ready_must_sync > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_ready_must_sync"])
+                .inc_by(self.sync_raftdb_ready_must_sync as i64);
+            self.sync_raftdb_ready_must_sync = 0;
         }
-        if self.not_reach_deadline > 0 {
-            SYNC_LOG_REASON
-                .with_label_values(&["not_reach_deadline"])
-                .inc_by(self.not_reach_deadline as i64);
-            self.not_reach_deadline = 0;
+        if self.sync_raftdb_trans_cache_is_full > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_trans_cache_is_full"])
+                .inc_by(self.sync_raftdb_trans_cache_is_full as i64);
+            self.sync_raftdb_trans_cache_is_full = 0;
         }
-        if self.peer_storage_require > 0 {
-            SYNC_LOG_REASON
-                .with_label_values(&["peer_storage_require"])
-                .inc_by(self.peer_storage_require as i64);
-            self.peer_storage_require = 0;
+        if self.sync_raftdb_peer_storage_require > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_peer_storage_require"])
+                .inc_by(self.sync_raftdb_peer_storage_require as i64);
+            self.sync_raftdb_peer_storage_require = 0;
+        }
+        if self.sync_raftdb_peer_destroy > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_peer_destroy"])
+                .inc_by(self.sync_raftdb_peer_destroy as i64);
+            self.sync_raftdb_peer_destroy = 0;
+        }
+        if self.sync_kvdb_count > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_kvdb_count"])
+                .inc_by(self.sync_kvdb_count as i64);
+            self.sync_kvdb_count = 0;
+        }
+        if self.sync_kvdb_ready_must_sync > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_kvdb_ready_must_sync"])
+                .inc_by(self.sync_kvdb_ready_must_sync as i64);
+            self.sync_kvdb_ready_must_sync = 0;
+        }
+        if self.sync_kvdb_peer_destroy > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_kvdb_peer_destroy"])
+                .inc_by(self.sync_kvdb_peer_destroy as i64);
+            self.sync_kvdb_peer_destroy = 0;
         }
     }
 }
@@ -478,8 +510,8 @@ pub struct RaftMetrics {
     pub commit_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
-    pub sync_log_reason: SyncLogReason,
     pub sync_log_interval: LocalHistogram,
+    pub sync_events: SyncEvents,
 }
 
 impl Default for RaftMetrics {
@@ -496,8 +528,8 @@ impl Default for RaftMetrics {
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
-            sync_log_reason: Default::default(),
             sync_log_interval: PEER_SYNC_LOG_INTERVAL_HISTOGRAM.local(),
+            sync_events: Default::default(),
         }
     }
 }
@@ -513,8 +545,8 @@ impl RaftMetrics {
         self.commit_log.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
-        self.sync_log_reason.flush();
         self.sync_log_interval.flush();
+        self.sync_events.flush();
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();

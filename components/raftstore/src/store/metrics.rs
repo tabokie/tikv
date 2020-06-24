@@ -416,11 +416,11 @@ lazy_static! {
             "pending read index count"
         ).unwrap();
 
-    pub static ref SYNC_LOG_REASON: IntCounterVec =
+    pub static ref SYNC_EVENTS: IntCounterVec =
         register_int_counter_vec!(
-            "tikv_raftstore_sync_log_reason",
-            "Total number of raft sync log events.",
-            &["reason"]
+            "tikv_raftstore_sync_events",
+            "Counts of raftstore sync events.",
+            &["event"]
         )
         .unwrap();
     pub static ref PEER_SYNC_LOG_INTERVAL_HISTOGRAM: Histogram =

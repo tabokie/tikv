@@ -312,7 +312,9 @@ pub enum PeerMsg<E: KvEngine> {
     /// that the raft node will not work anymore.
     Tick(PeerTicks),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes { res: ApplyTaskRes },
+    ApplyRes {
+        res: ApplyTaskRes,
+    },
     /// Message that can't be lost but rarely created. If they are lost, real bad
     /// things happen like some peers will be considered dead in the group.
     SignificantMsg(SignificantMsg),
@@ -351,11 +353,10 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::Synced(idx) => write!(fmt, "Synced {:?}", idx),
-            PeerMsg::AsyncMsgFailed(info) => write!(fmt,
+            PeerMsg::AsyncMsgFailed(info) => write!(
+                fmt,
                 "ToPeerI {:?}, ToLeader {:?}, IsSnapshotMsg {:?}",
-                info.to_peer_id,
-                info.to_leader,
-                info.is_snapshot_msg,
+                info.to_peer_id, info.to_leader, info.is_snapshot_msg,
             ),
         }
     }

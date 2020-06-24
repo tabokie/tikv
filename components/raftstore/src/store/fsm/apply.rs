@@ -290,6 +290,7 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     kv_wb: Option<W>,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
+    sync_kvdb_count: u64,
 
     last_applied_index: u64,
     committed_count: usize,
@@ -327,6 +328,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             apply_res: vec![],
             kv_wb_last_bytes: 0,
             kv_wb_last_keys: 0,
+            sync_kvdb_count: 0,
             last_applied_index: 0,
             committed_count: 0,
             // TODO: add metrics of kvdb sync events
@@ -369,6 +371,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             self.kv_wb = Some(kv_wb);
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
+            self.sync_kvdb_count = 0;
         }
     }
 
@@ -407,6 +410,9 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
                 .unwrap_or_else(|e| {
                     panic!("failed to write to engine: {:?}", e);
                 });
+            if need_sync {
+                self.sync_kvdb_count += 1;
+            }
             self.sync_log_hint = false;
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
