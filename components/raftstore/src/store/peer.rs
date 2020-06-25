@@ -1212,11 +1212,11 @@ impl Peer {
             ctx.sync_log = true;
         }
 
-        // Committed log may not sync yet in this instance
         let has_ready = if must_sync {
             self.raft_group
                 .has_ready_since(Some((self.last_applying_idx, None)))
         } else {
+            // Committed log may not sync yet in this instance
             self.raft_group.has_ready_since(Some((
                 self.last_applying_idx,
                 Some(self.get_store().synced_idx),

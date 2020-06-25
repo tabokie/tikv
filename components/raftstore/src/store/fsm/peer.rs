@@ -318,7 +318,7 @@ impl<'a, T: Transport, C: PdClient> PeerFsmDelegate<'a, T, C> {
                     self.fsm.peer.on_sync(idx);
                     self.fsm.has_ready = true;
                 }
-                PeerMsg::AsyncMsgFailed(info) => {
+                PeerMsg::AsyncSendMsgFailed(info) => {
                     self.fsm
                         .peer
                         .on_send_err(info.to_leader, info.is_snapshot_msg, info.to_peer_id)

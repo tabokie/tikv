@@ -295,8 +295,6 @@ struct ApplyContext<W: WriteBatch + WriteBatchVecExt<RocksEngine>> {
     last_applied_index: u64,
     committed_count: usize,
 
-    // Indicates that WAL can be synchronized when data is written to KV engine.
-    enable_sync_log: bool,
     // Whether synchronize WAL is preferred.
     sync_log_hint: bool,
     // Whether to use the delete range API instead of deleting one by one.
@@ -331,8 +329,6 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
             sync_kvdb_count: 0,
             last_applied_index: 0,
             committed_count: 0,
-            // TODO: add metrics of kvdb sync events
-            enable_sync_log: true,
             sync_log_hint: false,
             exec_ctx: None,
             use_delete_range: cfg.use_delete_range,
@@ -401,7 +397,7 @@ impl<W: WriteBatch + WriteBatchVecExt<RocksEngine>> ApplyContext<W> {
     /// Writes all the changes into RocksDB.
     /// If it returns true, all pending writes are persisted in engines.
     pub fn write_to_db(&mut self) -> bool {
-        let need_sync = self.enable_sync_log && self.sync_log_hint;
+        let need_sync = self.sync_log_hint;
         if self.kv_wb.as_ref().map_or(false, |wb| !wb.is_empty()) {
             let mut write_opts = engine_traits::WriteOptions::new();
             write_opts.set_sync(need_sync);
@@ -2822,7 +2818,6 @@ impl ApplyFsm {
                     if channel_timer.is_none() {
                         channel_timer = Some(start);
                     }
-
                     self.handle_apply(apply_ctx, apply);
                     if let Some(ref mut state) = self.delegate.yield_state {
                         state.pending_msgs = drainer.collect();
@@ -2837,7 +2832,7 @@ impl ApplyFsm {
                 Some(Msg::Snapshot(snap_task)) => self.handle_snapshot(apply_ctx, snap_task),
                 Some(Msg::Change { cmd, cb }) => self.handle_change(apply_ctx, cmd, cb),
                 #[cfg(any(test, feature = "testexport"))]
-                Some(Msg::Validate(_, f)) => f((&self.delegate, apply_ctx.enable_sync_log)),
+                Some(Msg::Validate(_, f)) => f((&self.delegate)),
                 None => break,
             }
         }

@@ -327,10 +327,10 @@ pub enum PeerMsg<E: KvEngine> {
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
     Synced(u64),
-    AsyncMsgFailed(PeerMsgIrrelevantInfo),
+    AsyncSendMsgFailed(PeerMsgTrivialInfo),
 }
 
-pub struct PeerMsgIrrelevantInfo {
+pub struct PeerMsgTrivialInfo {
     pub to_peer_id: u64,
     pub to_leader: bool,
     pub is_snapshot_msg: bool,
@@ -353,7 +353,7 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::Synced(idx) => write!(fmt, "Synced {:?}", idx),
-            PeerMsg::AsyncMsgFailed(info) => write!(
+            PeerMsg::AsyncSendMsgFailed(info) => write!(
                 fmt,
                 "ToPeerI {:?}, ToLeader {:?}, IsSnapshotMsg {:?}",
                 info.to_peer_id, info.to_leader, info.is_snapshot_msg,

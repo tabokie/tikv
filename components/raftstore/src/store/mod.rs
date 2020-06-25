@@ -24,7 +24,7 @@ pub use self::bootstrap::{
 pub use self::config::{Config, QuorumAlgorithm};
 pub use self::fsm::{new_compaction_listener, DestroyPeerJob, RaftRouter, StoreInfo};
 pub use self::msg::{
-    Callback, CasualMessage, PeerMsg, PeerMsgIrrelevantInfo, PeerTicks, RaftCommand, ReadCallback,
+    Callback, CasualMessage, PeerMsg, PeerMsgTrivialInfo, PeerTicks, RaftCommand, ReadCallback,
     ReadResponse, SignificantMsg, StoreMsg, StoreTick, WriteCallback, WriteResponse,
 };
 pub use self::peer::{
