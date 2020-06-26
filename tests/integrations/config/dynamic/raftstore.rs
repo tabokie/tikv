@@ -171,6 +171,10 @@ fn test_update_apply_store_config() {
     reg.region.set_id(region_id);
     apply_router.schedule_task(region_id, ApplyTask::Registration(reg));
 
+    validate_store(&raft_router, move |cfg: &Config| {
+        assert_eq!(cfg.messages_per_tick, 4096);
+    });
+
     // dispatch updated config
     cfg_controller
         .update_config("raftstore.messages-per-tick", "6904")
