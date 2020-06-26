@@ -60,8 +60,8 @@ use crate::store::worker::{
 };
 use crate::store::PdTask;
 use crate::store::{
-    util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerMsg, RaftCommand,
-    SignificantMsg, SnapManager, StoreMsg, StoreTick, PeerMsgTrivialInfo,
+    util, Callback, CasualMessage, GlobalReplicationState, MergeResultKind, PeerMsg,
+    PeerMsgTrivialInfo, RaftCommand, SignificantMsg, SnapManager, StoreMsg, StoreTick,
 };
 
 use crate::Result;
@@ -244,7 +244,11 @@ pub struct BlockableTransport<T: Transport + 'static> {
 }
 
 impl<T: Transport + 'static> BlockableTransport<T> {
-    pub fn new(trans: T, router: RaftRouter<RocksSnapshot>, enabled: bool) -> BlockableTransport<T> {
+    pub fn new(
+        trans: T,
+        router: RaftRouter<RocksSnapshot>,
+        enabled: bool,
+    ) -> BlockableTransport<T> {
         BlockableTransport {
             trans,
             router,
@@ -373,7 +377,9 @@ pub struct PollContext<T: Transport + 'static, C: 'static> {
     pub unsynced_regions: HashSet<(u64, u64)>,
 }
 
-impl<T: Transport + 'static, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch> for PollContext<T, C> {
+impl<T: Transport + 'static, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch>
+    for PollContext<T, C>
+{
     fn wb_mut(&mut self) -> (&mut RocksWriteBatch, &mut RocksWriteBatch) {
         (&mut self.kv_wb, &mut self.raft_wb)
     }
@@ -502,9 +508,7 @@ impl<T: Transport, C> PollContext<T, C> {
     fn on_synced(&mut self) {
         self.trans.send_cached();
         for (region_id, idx) in self.unsynced_regions.drain() {
-            self.router
-                .send(region_id, PeerMsg::Synced(idx))
-                .unwrap();
+            self.router.send(region_id, PeerMsg::Synced(idx)).unwrap();
         }
     }
 
@@ -604,14 +608,10 @@ impl<T: Transport, C> PollContext<T, C> {
             }
             let elapsed = current_ts - last_sync_ts;
             if elapsed > self.cfg.delay_sync_ns as i64 {
-                self.raft_metrics
-                    .sync_events
-                    .sync_raftdb_reach_deadline += 1;
+                self.raft_metrics.sync_events.sync_raftdb_reach_deadline += 1;
                 true
             } else {
-                self.raft_metrics
-                    .sync_events
-                    .raftdb_skipped_sync_count += 1;
+                self.raft_metrics.sync_events.raftdb_skipped_sync_count += 1;
                 false
             }
         }

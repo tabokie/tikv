@@ -911,7 +911,10 @@ impl Peer {
     }
 
     /// Collects all pending peers and update `peers_start_pending_time`.
-    pub fn collect_pending_peers<T: Transport + 'static, C>(&mut self, ctx: &PollContext<T, C>) -> Vec<metapb::Peer> {
+    pub fn collect_pending_peers<T: Transport + 'static, C>(
+        &mut self,
+        ctx: &PollContext<T, C>,
+    ) -> Vec<metapb::Peer> {
         let mut pending_peers = Vec::with_capacity(self.region().get_peers().len());
         let status = self.raft_group.status();
         let truncated_idx = self.get_store().truncated_index();
@@ -1294,14 +1297,11 @@ impl Peer {
         }
 
         let has_ready = if ctx.sync_log {
-            self.raft_group
-                .has_ready_since(self.last_applying_idx)
+            self.raft_group.has_ready_since(self.last_applying_idx)
         } else {
             // Committed log may not sync yet in this instance
-            self.raft_group.has_ready_from_range(
-                self.last_applying_idx,
-                self.get_store().synced_idx,
-            )
+            self.raft_group
+                .has_ready_from_range(self.last_applying_idx, self.get_store().synced_idx)
         };
 
         if !has_ready {
