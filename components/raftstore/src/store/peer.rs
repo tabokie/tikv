@@ -2827,7 +2827,7 @@ impl Peer {
         let to_leader = to_peer_id == self.leader_id();
         let is_snapshot_msg = msg_type == eraftpb::MessageType::MsgSnapshot;
 
-        let res = trans.maybe_cache_send(send_msg, self.is_leader(), to_leader, is_snapshot_msg);
+        let res = trans.maybe_delay_send(send_msg, self.is_leader(), to_leader, is_snapshot_msg);
         if let Err(e) = res {
             warn!(
                 "failed to send msg to other peer";

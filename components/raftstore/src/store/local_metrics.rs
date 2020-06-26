@@ -407,7 +407,7 @@ pub struct SyncEvents {
     pub sync_raftdb_reach_deadline_no_ready: u64,
     pub raftdb_skipped_sync_count: u64,
     pub sync_raftdb_ready_must_sync: u64,
-    pub sync_raftdb_trans_cache_is_full: u64,
+    pub sync_raftdb_trans_delayed_cache_is_full: u64,
     pub sync_raftdb_peer_storage_require: u64,
     pub sync_raftdb_peer_destroy: u64,
     pub sync_kvdb_count: u64,
@@ -423,7 +423,7 @@ impl Default for SyncEvents {
             sync_raftdb_reach_deadline_no_ready: 0,
             raftdb_skipped_sync_count: 0,
             sync_raftdb_ready_must_sync: 0,
-            sync_raftdb_trans_cache_is_full: 0,
+            sync_raftdb_trans_delayed_cache_is_full: 0,
             sync_raftdb_peer_storage_require: 0,
             sync_raftdb_peer_destroy: 0,
             sync_kvdb_count: 0,
@@ -465,11 +465,11 @@ impl SyncEvents {
                 .inc_by(self.sync_raftdb_ready_must_sync as i64);
             self.sync_raftdb_ready_must_sync = 0;
         }
-        if self.sync_raftdb_trans_cache_is_full > 0 {
+        if self.sync_raftdb_trans_delayed_cache_is_full > 0 {
             SYNC_EVENTS
-                .with_label_values(&["sync_raftdb_trans_cache_is_full"])
-                .inc_by(self.sync_raftdb_trans_cache_is_full as i64);
-            self.sync_raftdb_trans_cache_is_full = 0;
+                .with_label_values(&["sync_raftdb_trans_delayed_cache_is_full"])
+                .inc_by(self.sync_raftdb_trans_delayed_cache_is_full as i64);
+            self.sync_raftdb_trans_delayed_cache_is_full = 0;
         }
         if self.sync_raftdb_peer_storage_require > 0 {
             SYNC_EVENTS
