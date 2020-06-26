@@ -30,11 +30,13 @@ pub use self::util::validate_endpoints;
 pub use self::util::RECONNECT_INTERVAL_SEC;
 
 use std::ops::Deref;
+use std::sync::{Arc, RwLock};
 
 use futures::Future;
-use kvproto::configpb;
 use kvproto::metapb;
 use kvproto::pdpb;
+use kvproto::replication_modepb::{RegionReplicationStatus, ReplicationStatus};
+use semver::{SemVerError, Version};
 use tikv_util::time::UnixSecs;
 use txn_types::TimeStamp;
 
@@ -95,7 +97,11 @@ pub trait PdClient: Send + Sync {
     /// It may happen that multi nodes start at same time to try to
     /// bootstrap, but only one can succeed, while others will fail
     /// and must remove their created local Region data themselves.
-    fn bootstrap_cluster(&self, _stores: metapb::Store, _region: metapb::Region) -> Result<()> {
+    fn bootstrap_cluster(
+        &self,
+        _stores: metapb::Store,
+        _region: metapb::Region,
+    ) -> Result<Option<ReplicationStatus>> {
         unimplemented!();
     }
 
@@ -114,7 +120,7 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Informs PD when the store starts or some store information changes.
-    fn put_store(&self, _store: metapb::Store) -> Result<()> {
+    fn put_store(&self, _store: metapb::Store) -> Result<Option<ReplicationStatus>> {
         unimplemented!();
     }
 
@@ -167,6 +173,7 @@ pub trait PdClient: Send + Sync {
         _region: metapb::Region,
         _leader: metapb::Peer,
         _region_stat: RegionStat,
+        _replication_status: Option<RegionReplicationStatus>,
     ) -> PdFuture<()> {
         unimplemented!();
     }
@@ -197,7 +204,7 @@ pub trait PdClient: Send + Sync {
     }
 
     /// Sends store statistics regularly.
-    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<()> {
+    fn store_heartbeat(&self, _stats: pdpb::StoreStats) -> PdFuture<pdpb::StoreHeartbeatResponse> {
         unimplemented!();
     }
 
@@ -240,35 +247,6 @@ pub trait PdClient: Send + Sync {
     }
 }
 
-/// ConfigClient used for manage config
-pub trait ConfigClient: Send + Sync {
-    fn register_config(
-        &self,
-        _id: String,
-        _version: configpb::Version,
-        _cfg: String,
-    ) -> Result<configpb::CreateResponse> {
-        unimplemented!()
-    }
-
-    fn get_config(
-        &self,
-        _id: String,
-        _version: configpb::Version,
-    ) -> Result<configpb::GetResponse> {
-        unimplemented!()
-    }
-
-    fn update_config(
-        &self,
-        _id: String,
-        _version: configpb::Version,
-        _entries: Vec<configpb::ConfigEntry>,
-    ) -> Result<configpb::UpdateResponse> {
-        unimplemented!();
-    }
-}
-
 const REQUEST_TIMEOUT: u64 = 2; // 2s
 
 /// Takes the peer address (for sending raft messages) from a store.
@@ -277,5 +255,27 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
         store.take_peer_address()
     } else {
         store.take_address()
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct ClusterVersion {
+    version: Arc<RwLock<Option<Version>>>,
+}
+
+impl ClusterVersion {
+    pub fn get(&self) -> Option<Version> {
+        self.version.read().unwrap().clone()
+    }
+
+    fn set(&self, version: &str) -> std::result::Result<(), SemVerError> {
+        let new = Version::parse(version)?;
+        let mut holder = self.version.write().unwrap();
+        match &mut *holder {
+            Some(ref mut old) if *old < new => *old = new,
+            Some(_) => {}
+            None => *holder = Some(new),
+        }
+        Ok(())
     }
 }

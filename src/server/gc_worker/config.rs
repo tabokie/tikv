@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use configuration::{rollback_or, ConfigChange, ConfigManager, Configuration, RollbackCollector};
 use std::sync::Arc;
+
+use configuration::{ConfigChange, ConfigManager, Configuration};
 use tikv_util::config::{ReadableSize, VersionTrack};
 
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -16,6 +17,7 @@ pub struct GcConfig {
     pub ratio_threshold: f64,
     pub batch_keys: usize,
     pub max_write_bytes_per_sec: ReadableSize,
+    pub enable_compaction_filter: bool,
 }
 
 impl Default for GcConfig {
@@ -24,23 +26,15 @@ impl Default for GcConfig {
             ratio_threshold: DEFAULT_GC_RATIO_THRESHOLD,
             batch_keys: DEFAULT_GC_BATCH_KEYS,
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
+            enable_compaction_filter: false,
         }
     }
 }
 
 impl GcConfig {
     pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        self.validate_or_rollback(None)
-    }
-
-    pub fn validate_or_rollback(
-        &self,
-        mut rb_collector: Option<RollbackCollector<GcConfig>>,
-    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         if self.batch_keys == 0 {
-            rollback_or!(rb_collector, batch_keys, {
-                Err(("gc.batch_keys should not be 0.").into())
-            })
+            return Err(("gc.batch_keys should not be 0.").into());
         }
         Ok(())
     }

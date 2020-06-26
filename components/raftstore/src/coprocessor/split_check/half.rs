@@ -112,7 +112,7 @@ pub fn get_region_approximate_middle(
     db: &impl KvEngine,
     region: &Region,
 ) -> Result<Option<Vec<u8>>> {
-    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region);
+    let get_cf_size = |cf: &str| get_region_approximate_size_cf(db, cf, &region, 0);
 
     let default_cf_size = box_try!(get_cf_size(CF_DEFAULT));
     let write_cf_size = box_try!(get_cf_size(CF_WRITE));
@@ -167,10 +167,9 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
 
-    use engine::rocks;
-    use engine::rocks::util::{new_engine_opt, CFOptions};
-    use engine::rocks::Writable;
-    use engine::rocks::{ColumnFamilyOptions, DBOptions};
+    use engine_rocks::raw::Writable;
+    use engine_rocks::raw::{ColumnFamilyOptions, DBOptions};
+    use engine_rocks::raw_util::{new_engine_opt, CFOptions};
     use engine_rocks::Compat;
     use engine_traits::{ALL_CFS, CF_DEFAULT, LARGE_CFS};
     use kvproto::metapb::Peer;
@@ -262,7 +261,8 @@ mod tests {
             .iter()
             .map(|cf| CFOptions::new(cf, cf_opts.clone()))
             .collect();
-        let engine = Arc::new(rocks::util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
+        let engine =
+            Arc::new(engine_rocks::raw_util::new_engine_opt(path, db_opts, cfs_opts).unwrap());
 
         let cf_handle = engine.cf_handle(CF_DEFAULT).unwrap();
         let mut big_value = Vec::with_capacity(256);
