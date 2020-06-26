@@ -128,24 +128,6 @@ where
     rx.recv_timeout(Duration::from_secs(3)).unwrap();
 }
 
-fn validate_apply<F>(router: &ApplyRouter, region_id: u64, validate: F)
-where
-    F: FnOnce(bool) + Send + 'static,
-{
-    let (tx, rx) = mpsc::channel();
-    router.schedule_task(
-        region_id,
-        ApplyTask::Validate(
-            region_id,
-            Box::new(move |(_, sync_log): (_, bool)| {
-                validate(sync_log);
-                tx.send(()).unwrap();
-            }),
-        ),
-    );
-    rx.recv_timeout(Duration::from_secs(3)).unwrap();
-}
-
 #[test]
 fn test_update_raftstore_config() {
     let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
@@ -178,7 +160,7 @@ fn test_update_raftstore_config() {
 #[test]
 fn test_update_apply_store_config() {
     let (mut config, _dir) = TiKvConfig::with_tmp().unwrap();
-    config.raft_store.sync_log = true;
+    config.raft_store.messages_per_tick = 4096;
     config.validate().unwrap();
     let (cfg_controller, raft_router, apply_router, mut system) =
         start_raftstore(config.clone(), &_dir);
@@ -189,24 +171,14 @@ fn test_update_apply_store_config() {
     reg.region.set_id(region_id);
     apply_router.schedule_task(region_id, ApplyTask::Registration(reg));
 
-    validate_store(&raft_router, move |cfg: &Config| {
-        assert_eq!(cfg.sync_log, true);
-    });
-    validate_apply(&apply_router, region_id, |sync_log| {
-        assert_eq!(sync_log, true);
-    });
-
     // dispatch updated config
     cfg_controller
-        .update_config("raftstore.sync-log", "false")
+        .update_config("raftstore.messages-per-tick", "6904")
         .unwrap();
 
     // both configs should be updated
     validate_store(&raft_router, move |cfg: &Config| {
-        assert_eq!(cfg.sync_log, false);
-    });
-    validate_apply(&apply_router, region_id, |sync_log| {
-        assert_eq!(sync_log, false);
+        assert_eq!(cfg.messages_per_tick, 6904);
     });
 
     system.shutdown();

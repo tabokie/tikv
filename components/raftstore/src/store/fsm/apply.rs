@@ -3471,7 +3471,7 @@ mod tests {
             region_id,
             Msg::Validate(
                 region_id,
-                Box::new(move |(delegate): (&ApplyDelegate<RocksEngine>)| {
+                Box::new(move |delegate: &ApplyDelegate<RocksEngine>| {
                     validate(delegate);
                     validate_tx.send(()).unwrap();
                 }),
