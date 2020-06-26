@@ -979,9 +979,9 @@ impl Peer {
         }
     }
 
-    pub fn on_sync(&mut self, idx: u64) {
-        self.raft_group.raft.on_sync(idx);
-        self.mut_store().on_sync(idx);
+    pub fn on_synced(&mut self, idx: u64) {
+        self.raft_group.raft.on_synced(idx);
+        self.mut_store().on_synced(idx);
     }
 
     #[inline]
@@ -1198,29 +1198,26 @@ impl Peer {
             }
         }
 
-        let must_sync = if ctx.cfg.delay_sync_ns == 0 {
-            true
-        } else if self.raft_group.has_must_sync_ready() {
-            if !ctx.sync_log {
+        if !ctx.sync_log {
+            ctx.sync_log = if !ctx.cfg.delay_sync_enabled() {
+                true
+            } else if self.raft_group.has_must_sync_ready() {
                 ctx.raft_metrics.sync_events.sync_raftdb_ready_must_sync += 1;
-            }
-            true
-        } else {
-            false
-        };
-        if must_sync {
-            ctx.sync_log = true;
+                true
+            } else {
+                false
+            };
         }
 
-        let has_ready = if must_sync {
+        let has_ready = if ctx.sync_log {
             self.raft_group
-                .has_ready_since(Some((self.last_applying_idx, None)))
+                .has_ready_since(self.last_applying_idx)
         } else {
             // Committed log may not sync yet in this instance
-            self.raft_group.has_ready_since(Some((
+            self.raft_group.has_ready_from_range(
                 self.last_applying_idx,
-                Some(self.get_store().synced_idx),
-            )))
+                self.get_store().synced_idx,
+            )
         };
 
         if !has_ready {
@@ -1249,7 +1246,7 @@ impl Peer {
         };
         before_handle_raft_ready_1003();
 
-        let mut ready = if must_sync {
+        let mut ready = if ctx.sync_log {
             self.raft_group.ready_since(self.last_applying_idx)
         } else {
             self.raft_group
@@ -2664,20 +2661,15 @@ impl Peer {
         let to_leader = to_peer_id == self.leader_id();
         let is_snapshot_msg = msg_type == eraftpb::MessageType::MsgSnapshot;
 
-        let res = if !self.is_leader() {
-            trans.maybe_cache_send(send_msg, to_leader, is_snapshot_msg)
-        } else {
-            trans.send(send_msg)
-        };
-
-        if let Err(err) = res {
+        let res = trans.maybe_cache_send(send_msg, self.is_leader(), to_leader, is_snapshot_msg);
+        if let Err(e) = res {
             warn!(
                 "failed to send msg to other peer";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "target_peer_id" => to_peer_id,
                 "target_store_id" => to_store_id,
-                "err" => ?err,
+                "err" => ?e,
             );
             self.on_send_err(to_leader, is_snapshot_msg, to_peer_id);
         };

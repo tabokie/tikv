@@ -484,6 +484,10 @@ impl Config {
         Ok(())
     }
 
+    pub fn delay_sync_enabled(&self) -> bool {
+        self.delay_sync_ns != 0
+    }
+
     pub fn write_into_metrics(&self) {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["delay_sync_ns"])

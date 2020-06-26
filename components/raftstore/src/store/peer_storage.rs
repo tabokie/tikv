@@ -624,7 +624,7 @@ impl PeerStorage {
         ))
     }
 
-    pub fn on_sync(&mut self, idx: u64) {
+    pub fn on_synced(&mut self, idx: u64) {
         self.synced_idx = idx;
     }
 

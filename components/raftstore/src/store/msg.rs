@@ -355,7 +355,7 @@ impl<E: KvEngine> fmt::Debug for PeerMsg<E> {
             PeerMsg::Synced(idx) => write!(fmt, "Synced {:?}", idx),
             PeerMsg::AsyncSendMsgFailed(info) => write!(
                 fmt,
-                "ToPeerI {:?}, ToLeader {:?}, IsSnapshotMsg {:?}",
+                "ToPeer {:?}, ToLeader {:?}, IsSnapshotMsg {:?}",
                 info.to_peer_id, info.to_leader, info.is_snapshot_msg,
             ),
         }
