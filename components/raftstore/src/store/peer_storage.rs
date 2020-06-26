@@ -678,7 +678,7 @@ where
         }
         let last_term = init_last_term(&engines, region, &raft_state, &apply_state)?;
         let applied_index_term = init_applied_index_term(&engines, region, &apply_state)?;
-        let applied_index = (&apply_state).applied_index;
+        let applied_index = apply_state.applied_index;
 
         Ok(PeerStorage {
             engines,

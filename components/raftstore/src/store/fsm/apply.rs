@@ -2511,7 +2511,7 @@ where
     },
     #[cfg(any(test, feature = "testexport"))]
     #[allow(clippy::type_complexity)]
-    Validate(u64, Box<dyn FnOnce((&ApplyDelegate<E>, bool)) + Send>),
+    Validate(u64, Box<dyn FnOnce(&ApplyDelegate<E>) + Send>),
 }
 
 impl<E> Msg<E>
@@ -3015,7 +3015,7 @@ where
                     cb,
                 }) => self.handle_change(apply_ctx, cmd, region_epoch, cb),
                 #[cfg(any(test, feature = "testexport"))]
-                Some(Msg::Validate(_, f)) => f((&self.delegate)),
+                Some(Msg::Validate(_, f)) => f(&self.delegate),
                 None => break,
             }
         }
@@ -3471,7 +3471,7 @@ mod tests {
             region_id,
             Msg::Validate(
                 region_id,
-                Box::new(move |(delegate, _): (&ApplyDelegate<RocksEngine>, _)| {
+                Box::new(move |(delegate): (&ApplyDelegate<RocksEngine>)| {
                     validate(delegate);
                     validate_tx.send(()).unwrap();
                 }),
