@@ -69,7 +69,7 @@ use engine_rocks::{CompactedEvent, CompactionListener};
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use pd_client::PdClient;
 use sst_importer::SSTImporter;
-use tikv_util::collections::{HashMap, HashSet};
+use tikv_util::collections::HashMap;
 use tikv_util::config::{Tracker, VersionTrack};
 use tikv_util::mpsc::{self, LooseBoundedSender, Receiver};
 use tikv_util::time::{duration_to_sec, Instant as TiInstant};
@@ -374,7 +374,7 @@ pub struct PollContext<T: Transport + 'static, C: 'static> {
     pub node_start_time: Option<Instant>,
     global_last_sync_time: Arc<AtomicI64>,
     local_last_sync_time: i64,
-    unsynced_regions: HashSet<(u64, u64)>,
+    unsynced_regions: HashMap<u64, u64>,
 }
 
 impl<T: Transport + 'static, C> HandleRaftReadyContext<RocksWriteBatch, RocksWriteBatch>
@@ -861,10 +861,11 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                     .post_raft_ready_append(ready, invoke_ctx);
                 let idx = peers[batch_pos].peer.raft_group.raft.raft_log.last_index();
                 if sync {
+                    self.poll_ctx.unsynced_regions.remove(&region_id);
                     peers[batch_pos].peer.on_synced(idx);
                 } else {
                     // If sync is false, delay-fsync must be enabled
-                    self.poll_ctx.unsynced_regions.insert((region_id, idx));
+                    self.poll_ctx.unsynced_regions.insert(region_id, idx);
                 }
             }
         }
@@ -1274,7 +1275,7 @@ where
             node_start_time: Some(Instant::now()),
             global_last_sync_time: self.last_sync_ts_in_ns.clone(),
             local_last_sync_time: self.last_sync_ts_in_ns.load(Ordering::SeqCst),
-            unsynced_regions: HashSet::default(),
+            unsynced_regions: HashMap::default(),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
         RaftPoller {
