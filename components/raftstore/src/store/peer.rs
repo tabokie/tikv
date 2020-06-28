@@ -1371,18 +1371,18 @@ impl Peer {
                 if hs.get_commit() > self.get_store().committed_index() {
                     // TODO: When leader's synced-idx behide two follower's this will fail,
                     //   Gengliqi will rewrite this soon, we commentted this as workaround
-                    /*
-                    assert_eq!(
-                        ready
-                            .committed_entries
-                            .as_ref()
-                            .unwrap()
-                            .last()
-                            .unwrap()
-                            .index,
-                        hs.get_commit()
-                    );
-                    */
+                    if !ctx.cfg.delay_sync_enabled() {
+                        assert_eq!(
+                            ready
+                                .committed_entries
+                                .as_ref()
+                                .unwrap()
+                                .last()
+                                .unwrap()
+                                .index,
+                            hs.get_commit()
+                        );
+                    }
                     let mut split_to_be_updated = true;
                     let mut merge_to_be_updated = true;
                     for entry in ready.committed_entries.as_ref().unwrap().iter().rev() {

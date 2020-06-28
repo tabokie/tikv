@@ -21,7 +21,7 @@ use kvproto::replication_modepb::{ReplicationMode, ReplicationStatus};
 use protobuf::Message;
 use raft::eraftpb::MessageType;
 use raft::{Ready, StateRole};
-use std::cmp::{Ord, Ordering as CmpOrdering};
+use std::cmp::{self, Ord, Ordering as CmpOrdering};
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::ops::Deref;
@@ -372,8 +372,9 @@ pub struct PollContext<T: Transport + 'static, C: 'static> {
     pub current_time: Option<Timespec>,
     pub perf_context_statistics: PerfContextStatistics,
     pub node_start_time: Option<Instant>,
-    global_last_sync_time: Arc<AtomicI64>,
-    local_last_sync_time: i64,
+    global_plan_sync_ts: Arc<AtomicI64>,
+    global_last_sync_ts: Arc<AtomicI64>,
+    local_last_sync_ts: i64,
     unsynced_regions: HashMap<u64, u64>,
 }
 
@@ -511,26 +512,36 @@ impl<T: Transport, C> PollContext<T, C> {
         if !self.cfg.delay_sync_enabled() {
             return;
         }
-        let elapsed = current_ts - self.global_last_sync_time.load(Ordering::SeqCst);
+        let elapsed = current_ts - self.global_last_sync_ts.load(Ordering::SeqCst);
         self.raft_metrics
             .sync_log_interval
             .observe(elapsed as f64 / 1e9);
-        self.global_last_sync_time
+        self.global_last_sync_ts
             .store(current_ts, Ordering::Relaxed);
-        self.local_last_sync_time = current_ts;
+        self.local_last_sync_ts = current_ts;
         self.flush_delayed_on_synced();
     }
 
     pub fn check_sync(&mut self, current_ts: i64) -> bool {
+        let sync = self.check_sync_by_deadline_and_delayed(current_ts);
+        if sync {
+            // It's ok if others rewrite global_plan_sync_ts before this thread
+            let plan_sync_ts = self.global_plan_sync_ts.load(Ordering::SeqCst);
+            self.global_plan_sync_ts.store(cmp::max(current_ts, plan_sync_ts), Ordering::Relaxed);
+        }
+        sync
+    }
+
+    fn check_sync_by_deadline_and_delayed(&mut self, current_ts: i64) -> bool {
         if self.trans.delayed_count() > 1024 {
             self.raft_metrics
                 .sync_events
                 .sync_raftdb_trans_delayed_cache_is_full += 1;
             return true;
         }
-        let last_sync_ts = self.try_flush_delayed_when_others_synced();
-        let elapsed = current_ts - last_sync_ts;
-        if elapsed > self.cfg.delay_sync_ns as i64 {
+        let last_sync_ts = self.global_last_sync_ts.load(Ordering::SeqCst);
+        let plan_sync_ts = self.global_plan_sync_ts.load(Ordering::SeqCst);
+        if current_ts - cmp::max(last_sync_ts, plan_sync_ts) > self.cfg.delay_sync_ns as i64 {
             self.raft_metrics.sync_events.sync_raftdb_reach_deadline += 1;
             true
         } else {
@@ -539,28 +550,37 @@ impl<T: Transport, C> PollContext<T, C> {
         }
     }
 
-    pub fn check_flush_delayed(&mut self) -> bool {
+    pub fn check_flush_delayed(&mut self, is_pause_check: bool) -> bool {
         if !self.cfg.delay_sync_enabled() {
             return false;
         }
+        if self.trans.delayed_count() == 0 && self.unsynced_regions.is_empty() {
+            return false;
+        }
 
-        let last_sync_ts = self.global_last_sync_time.load(Ordering::SeqCst);
+        let last_sync_ts = self.global_last_sync_ts.load(Ordering::SeqCst);
         let current_ts = timespec_to_nanos(TiInstant::now_coarse());
         let elapsed = current_ts - last_sync_ts;
 
         // Wait a bit longer: it's better to let other threads with actual write to trigger sync
-        if elapsed > self.cfg.delay_sync_ns as i64 * 2 {
+        if elapsed > self.cfg.delay_sync_ns as i64 * 10 {
             if let Err(e) = self.engines.raft.sync_wal() {
                 warn!("raftdb.sync_wal() failed"; "error" => ?e);
                 return false;
             }
             self.raft_metrics.sync_events.sync_raftdb_count += 1;
-            self.raft_metrics
-                .sync_events
-                .sync_raftdb_reach_deadline_no_ready += 1;
-            self.global_last_sync_time
+            if is_pause_check {
+                self.raft_metrics
+                    .sync_events
+                    .sync_raftdb_before_pause += 1;
+            } else {
+                self.raft_metrics
+                    .sync_events
+                    .sync_raftdb_reach_deadline_no_ready += 1;
+            }
+            self.global_last_sync_ts
                 .store(current_ts, Ordering::Relaxed);
-            self.local_last_sync_time = current_ts;
+            self.local_last_sync_ts = current_ts;
             self.raft_metrics
                 .sync_log_interval
                 .observe(elapsed as f64 / 1e9);
@@ -568,52 +588,20 @@ impl<T: Transport, C> PollContext<T, C> {
             return true;
         }
 
-        if last_sync_ts > self.local_last_sync_time {
-            self.local_last_sync_time = last_sync_ts;
+        if last_sync_ts > self.local_last_sync_ts {
+            self.local_last_sync_ts = last_sync_ts;
             self.flush_delayed_on_synced();
             return true;
         }
         false
     }
 
-    pub fn on_pause_check_flush_delayed(&mut self) {
-        if !self.cfg.delay_sync_enabled() {
-            return;
-        }
-        if self.trans.delayed_count() == 0 && self.unsynced_regions.is_empty() {
-            return;
-        }
-        if self.check_flush_delayed() {
-            return;
-        }
-
-        if let Err(e) = self.engines.raft.sync_wal() {
-            error!("raftdb.sync_wal() on pausing failed, may cause stucking for a while"; "error" => ?e);
-            return;
-        }
-        self.raft_metrics.sync_events.sync_raftdb_count += 1;
-        self.raft_metrics
-            .sync_events
-            .sync_raftdb_reach_deadline_no_ready += 1;
-
-        self.local_last_sync_time = timespec_to_nanos(TiInstant::now_coarse());
-        let last_sync_ts = self
-            .global_last_sync_time
-            .swap(self.local_last_sync_time, Ordering::Relaxed);
-        let elapsed = self.local_last_sync_time - last_sync_ts;
-        self.raft_metrics
-            .sync_log_interval
-            .observe(elapsed as f64 / 1e9);
-        self.flush_delayed_on_synced();
-    }
-
-    fn try_flush_delayed_when_others_synced(&mut self) -> i64 {
-        let last_sync_ts = self.global_last_sync_time.load(Ordering::SeqCst);
-        if last_sync_ts > self.local_last_sync_time {
-            self.local_last_sync_time = last_sync_ts;
+    pub fn try_flush_delayed_when_others_synced(&mut self) {
+        let last_sync_ts = self.global_last_sync_ts.load(Ordering::SeqCst);
+        if last_sync_ts > self.local_last_sync_ts {
+            self.local_last_sync_ts = last_sync_ts;
             self.flush_delayed_on_synced();
         }
-        last_sync_ts
     }
 
     fn flush_delayed_on_synced(&mut self) {
@@ -807,6 +795,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
         }
         fail_point!("raft_between_save");
+        self.poll_ctx.try_flush_delayed_when_others_synced();
         let mut sync = self.poll_ctx.sync_log || !self.poll_ctx.cfg.delay_sync_enabled();
         let current_ts = timespec_to_nanos(TiInstant::now_coarse());
         if !sync {
@@ -1003,7 +992,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> fo
         if self.poll_ctx.has_ready {
             self.handle_raft_ready(peers);
         } else {
-            self.poll_ctx.check_flush_delayed();
+            self.poll_ctx.check_flush_delayed(false);
         }
         self.poll_ctx.current_time = None;
         self.poll_ctx
@@ -1015,7 +1004,7 @@ impl<T: Transport, C: PdClient> PollHandler<PeerFsm<RocksSnapshot>, StoreFsm> fo
     }
 
     fn pause(&mut self) {
-        self.poll_ctx.on_pause_check_flush_delayed();
+        self.poll_ctx.check_flush_delayed(true);
         if self.poll_ctx.need_flush_trans {
             self.poll_ctx.trans.flush();
             self.poll_ctx.need_flush_trans = false;
@@ -1045,7 +1034,8 @@ pub struct RaftPollerBuilder<T, C> {
     pub engines: KvEngines<RocksEngine, RocksEngine>,
     applying_snap_count: Arc<AtomicUsize>,
     global_replication_state: Arc<Mutex<GlobalReplicationState>>,
-    last_sync_ts_in_ns: Arc<AtomicI64>,
+    global_plan_sync_ts: Arc<AtomicI64>,
+    global_last_sync_ts: Arc<AtomicI64>,
 }
 
 impl<T, C> RaftPollerBuilder<T, C> {
@@ -1275,8 +1265,9 @@ where
             current_time: None,
             perf_context_statistics: PerfContextStatistics::new(self.cfg.value().perf_level),
             node_start_time: Some(Instant::now()),
-            global_last_sync_time: self.last_sync_ts_in_ns.clone(),
-            local_last_sync_time: self.last_sync_ts_in_ns.load(Ordering::SeqCst),
+            global_plan_sync_ts: self.global_plan_sync_ts.clone(),
+            global_last_sync_ts: self.global_last_sync_ts.clone(),
+            local_last_sync_ts: self.global_last_sync_ts.load(Ordering::SeqCst),
             unsynced_regions: HashMap::default(),
         };
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1382,7 +1373,10 @@ impl RaftBatchSystem {
             store_meta,
             applying_snap_count: Arc::new(AtomicUsize::new(0)),
             future_poller: workers.future_poller.sender().clone(),
-            last_sync_ts_in_ns: Arc::new(AtomicI64::new(
+            global_plan_sync_ts: Arc::new(AtomicI64::new(
+                timespec_to_nanos(TiInstant::now_coarse()),
+            )),
+            global_last_sync_ts: Arc::new(AtomicI64::new(
                 timespec_to_nanos(TiInstant::now_coarse()),
             )),
         };
