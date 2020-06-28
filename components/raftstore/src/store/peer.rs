@@ -1291,7 +1291,7 @@ impl Peer {
         if !ctx.sync_log {
             ctx.sync_log = if !ctx.cfg.delay_sync_enabled() {
                 true
-            } else if self.raft_group.has_must_sync_ready() {
+            } else if self.raft_group.has_must_immediate_sync_ready() {
                 ctx.raft_metrics.sync_events.sync_raftdb_ready_must_sync += 1;
                 true
             } else {

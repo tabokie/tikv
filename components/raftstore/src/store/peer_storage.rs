@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::{cmp, error, u64};
 
+use crate::store::local_metrics::RaftMetrics;
 use engine_traits::CF_RAFT;
 use engine_traits::{KvEngine, KvEngines, Mutable, Peekable, WriteBatch};
 use keys::{self, enc_end_key, enc_start_key};
@@ -321,6 +322,7 @@ where
     fn raft_wb_mut(&mut self) -> &mut WR;
     fn sync_log(&self) -> bool;
     fn set_sync_log(&mut self, sync: bool);
+    fn metrics_mut(&mut self) -> &mut RaftMetrics;
 }
 
 fn storage_error<E>(error: E) -> raft::Error
@@ -1026,8 +1028,8 @@ where
         };
 
         for entry in entries {
-            if !ready_ctx.sync_log() {
-                ready_ctx.set_sync_log(get_sync_log_from_entry(entry));
+            if !ready_ctx.sync_log() && get_sync_log_from_entry(entry, ready_ctx.metrics_mut()) {
+                ready_ctx.set_sync_log(true);
             }
             ready_ctx.raft_wb_mut().put_msg(
                 &keys::raft_log_key(self.get_region_id(), entry.get_index()),
@@ -1352,10 +1354,6 @@ where
             last_index(&ctx.raft_state)
         };
 
-        if ready.must_sync() {
-            ready_ctx.set_sync_log(true);
-        }
-
         if !ready.entries().is_empty() {
             self.append(&mut ctx, ready.entries(), ready_ctx)?;
         }
@@ -1445,8 +1443,9 @@ where
     }
 }
 
-fn get_sync_log_from_entry(entry: &Entry) -> bool {
+fn get_sync_log_from_entry(entry: &Entry, metrics: &mut RaftMetrics) -> bool {
     if entry.get_sync_log() {
+        metrics.sync_events.sync_raftdb_storage_entry_require += 1;
         return true;
     }
 
@@ -1454,6 +1453,7 @@ fn get_sync_log_from_entry(entry: &Entry) -> bool {
     if !ctx.is_empty() {
         let ctx = ProposalContext::from_bytes(ctx);
         if ctx.contains(ProposalContext::SYNC_LOG) {
+            metrics.sync_events.sync_raftdb_storage_entry_ctx_require += 1;
             return true;
         }
     }
@@ -1760,6 +1760,7 @@ mod tests {
         kv_wb: RocksWriteBatch,
         raft_wb: RocksWriteBatch,
         sync_log: bool,
+        metrics: RaftMetrics,
     }
 
     impl ReadyContext {
@@ -1768,6 +1769,7 @@ mod tests {
                 kv_wb: s.engines.kv.write_batch(),
                 raft_wb: s.engines.raft.write_batch(),
                 sync_log: false,
+                metrics: RaftMetrics::default(),
             }
         }
     }
@@ -1787,6 +1789,9 @@ mod tests {
         }
         fn set_sync_log(&mut self, sync: bool) {
             self.sync_log = sync;
+        }
+        fn metrics_mut(&mut self) -> &mut RaftMetrics {
+            &mut self.metrics
         }
     }
 
@@ -2542,6 +2547,7 @@ mod tests {
     #[test]
     fn test_sync_log() {
         let mut tbl = vec![];
+        let mut metrics = RaftMetrics::default();
 
         // Do not sync empty entrise.
         tbl.push((Entry::default(), false));
@@ -2562,7 +2568,7 @@ mod tests {
         tbl.push((e, true));
 
         for (e, sync) in tbl {
-            assert_eq!(get_sync_log_from_entry(&e), sync, "{:?}", e);
+            assert_eq!(get_sync_log_from_entry(&e, &mut metrics), sync, "{:?}", e);
         }
     }
 

@@ -401,12 +401,14 @@ impl<T: Transport + 'static, C> HandleRaftReadyContext<RocksWriteBatch, RocksWri
 
     #[inline]
     fn set_sync_log(&mut self, sync: bool) {
-        if !self.sync_log && sync {
-            self.raft_metrics
-                .sync_events
-                .sync_raftdb_peer_storage_require += 1;
+        if sync {
+            self.sync_log = sync;
         }
-        self.sync_log = sync;
+    }
+
+    #[inline]
+    fn metrics_mut(&mut self) -> &mut RaftMetrics {
+        &mut self.raft_metrics
     }
 }
 

@@ -408,7 +408,8 @@ pub struct SyncEvents {
     pub raftdb_skipped_sync_count: u64,
     pub sync_raftdb_ready_must_sync: u64,
     pub sync_raftdb_trans_delayed_cache_is_full: u64,
-    pub sync_raftdb_peer_storage_require: u64,
+    pub sync_raftdb_storage_entry_require: u64,
+    pub sync_raftdb_storage_entry_ctx_require: u64,
     pub sync_raftdb_peer_destroy: u64,
     pub sync_kvdb_count: u64,
     pub sync_kvdb_ready_must_sync: u64,
@@ -424,7 +425,8 @@ impl Default for SyncEvents {
             raftdb_skipped_sync_count: 0,
             sync_raftdb_ready_must_sync: 0,
             sync_raftdb_trans_delayed_cache_is_full: 0,
-            sync_raftdb_peer_storage_require: 0,
+            sync_raftdb_storage_entry_require: 0,
+            sync_raftdb_storage_entry_ctx_require: 0,
             sync_raftdb_peer_destroy: 0,
             sync_kvdb_count: 0,
             sync_kvdb_ready_must_sync: 0,
@@ -471,11 +473,17 @@ impl SyncEvents {
                 .inc_by(self.sync_raftdb_trans_delayed_cache_is_full as i64);
             self.sync_raftdb_trans_delayed_cache_is_full = 0;
         }
-        if self.sync_raftdb_peer_storage_require > 0 {
+        if self.sync_raftdb_storage_entry_require > 0 {
             SYNC_EVENTS
-                .with_label_values(&["sync_raftdb_peer_storage_require"])
-                .inc_by(self.sync_raftdb_peer_storage_require as i64);
-            self.sync_raftdb_peer_storage_require = 0;
+                .with_label_values(&["sync_raftdb_storage_entry_require"])
+                .inc_by(self.sync_raftdb_storage_entry_require as i64);
+            self.sync_raftdb_storage_entry_require = 0;
+        }
+        if self.sync_raftdb_storage_entry_ctx_require > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_storage_entry_ctx_require"])
+                .inc_by(self.sync_raftdb_storage_entry_ctx_require as i64);
+            self.sync_raftdb_storage_entry_ctx_require = 0;
         }
         if self.sync_raftdb_peer_destroy > 0 {
             SYNC_EVENTS
