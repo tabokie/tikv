@@ -533,6 +533,7 @@ pub struct RaftMetrics {
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
     pub sync_log_interval: LocalHistogram,
+    pub sync_delay_duration: LocalHistogram,
     pub sync_events: SyncEvents,
 }
 
@@ -551,6 +552,7 @@ impl Default for RaftMetrics {
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
             sync_log_interval: PEER_SYNC_LOG_INTERVAL_HISTOGRAM.local(),
+            sync_delay_duration: PEER_SYNC_DELAY_HISTOGRAM.local(),
             sync_events: Default::default(),
         }
     }
@@ -568,6 +570,7 @@ impl RaftMetrics {
         self.message_dropped.flush();
         self.invalid_proposal.flush();
         self.sync_log_interval.flush();
+        self.sync_delay_duration.flush();
         self.sync_events.flush();
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);

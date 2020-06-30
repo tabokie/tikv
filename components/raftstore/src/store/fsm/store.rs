@@ -512,6 +512,7 @@ impl<T: Transport, C> PollContext<T, C> {
         if !self.cfg.delay_sync_enabled() {
             return;
         }
+        // TODO: global_last_sync maybe updated, so elapsed maybe shorter than actual time
         let elapsed = current_ts - self.global_last_sync_ts.load(Ordering::SeqCst);
         self.raft_metrics
             .sync_log_interval
@@ -541,7 +542,9 @@ impl<T: Transport, C> PollContext<T, C> {
         }
         let last_sync_ts = self.global_last_sync_ts.load(Ordering::SeqCst);
         let plan_sync_ts = self.global_plan_sync_ts.load(Ordering::SeqCst);
-        if current_ts - cmp::max(last_sync_ts, plan_sync_ts) > self.cfg.delay_sync_ns as i64 {
+        let elapsed = current_ts - cmp::max(last_sync_ts, plan_sync_ts);
+        if elapsed > self.cfg.delay_sync_ns as i64 {
+            self.raft_metrics.sync_delay_duration.observe(elapsed as f64 / 1e9);
             self.raft_metrics.sync_events.sync_raftdb_reach_deadline += 1;
             true
         } else {
@@ -795,12 +798,12 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
             }
         }
         fail_point!("raft_between_save");
+
         self.poll_ctx.try_flush_delayed_when_others_synced();
-        let mut sync = self.poll_ctx.sync_log || !self.poll_ctx.cfg.delay_sync_enabled();
+        // If there are lots of empty ready in a row,
+        //  may cause hungry delayed-peers, but I think it won't happen
+        let mut sync = false;
         let current_ts = timespec_to_nanos(TiInstant::now_coarse());
-        if !sync {
-            sync = self.poll_ctx.check_sync(current_ts);
-        }
         if !self.poll_ctx.raft_wb.is_empty() {
             fail_point!(
                 "raft_before_save_on_store_1",
@@ -808,6 +811,7 @@ impl<T: Transport, C: PdClient> RaftPoller<T, C> {
                 |_| {}
             );
             let mut write_opts = WriteOptions::new();
+            sync = self.poll_ctx.sync_log || !self.poll_ctx.cfg.delay_sync_enabled() || self.poll_ctx.check_sync(current_ts);
             write_opts.set_sync(sync);
             self.poll_ctx
                 .engines

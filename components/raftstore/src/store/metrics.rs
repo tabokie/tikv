@@ -477,6 +477,12 @@ lazy_static! {
             "Bucketed histogram of sync log interval",
             exponential_buckets(0.0001, 2.0, 20).unwrap()
         ).unwrap();
+    pub static ref PEER_SYNC_DELAY_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_sync_delay_seconds",
+            "Bucketed histogram of sync delay seconds",
+            exponential_buckets(0.0001, 2.0, 20).unwrap()
+        ).unwrap();
 
     pub static ref APPLY_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raftstore_apply_pending_bytes",
