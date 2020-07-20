@@ -2087,7 +2087,7 @@ impl Peer {
         let status = self.raft_group.status();
         let progress = status.progress.unwrap();
 
-        if !progress.voter_ids().contains(&peer_id) {
+        if !progress.voter_ids().contains(peer_id) {
             return Some("non voter");
         }
 
