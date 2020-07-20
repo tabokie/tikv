@@ -19,12 +19,12 @@ use tokio_core::reactor::Handle;
 
 use crate::server::metrics::*;
 use crate::storage::kv::{
-    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics,
+    Engine, Error as EngineError, ErrorInner as EngineErrorInner, ScanMode, Statistics, WriteData,
 };
 use crate::storage::mvcc::{
     check_need_gc, check_region_need_gc, Error as MvccError, MvccReader, MvccTxn,
 };
-use pd_client::PdClient;
+use pd_client::{ClusterVersion, DummyPdClient, PdClient};
 use raftstore::coprocessor::{CoprocessorHost, RegionInfoAccessor, RegionInfoProvider};
 use raftstore::router::ServerRaftStoreRouter;
 use raftstore::store::msg::StoreMsg;
@@ -293,14 +293,14 @@ impl<E: Engine> GcRunner<E> {
             reader
                 .scan_keys(from, self.cfg.batch_keys)
                 .map_err(Error::from)
-                .and_then(|(keys, next)| {
+                .map(|(keys, next)| {
                     if keys.is_empty() {
                         assert!(next.is_none());
                         if is_range_start {
                             GC_EMPTY_RANGE_COUNTER.inc();
                         }
                     }
-                    Ok((keys, next))
+                    (keys, next)
                 })
         };
         self.stats.add(reader.get_statistics());
@@ -321,6 +321,8 @@ impl<E: Engine> GcRunner<E> {
             Some(ScanMode::Forward),
             TimeStamp::zero(),
             !ctx.get_not_fill_cache(),
+            // TODO txn only used for GC, but this is hacky, maybe need an Option?
+            Arc::new(DummyPdClient::new()),
         );
         for k in keys {
             let gc_info = txn.gc(k.clone(), safe_point)?;
@@ -356,7 +358,7 @@ impl<E: Engine> GcRunner<E> {
         if !modifies.is_empty() {
             self.refresh_cfg();
             self.limiter.blocking_consume(write_size);
-            self.engine.write(ctx, modifies)?;
+            self.engine.write(ctx, WriteData::from_modifies(modifies))?;
         }
         Ok(next_scan_key)
     }
@@ -680,6 +682,7 @@ pub struct GcWorker<E: Engine> {
     applied_lock_collector: Option<Arc<AppliedLockCollector>>,
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
+    cluster_version: ClusterVersion,
 }
 
 impl<E: Engine> Clone for GcWorker<E> {
@@ -699,6 +702,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             worker_scheduler: self.worker_scheduler.clone(),
             applied_lock_collector: self.applied_lock_collector.clone(),
             gc_manager_handle: self.gc_manager_handle.clone(),
+            cluster_version: self.cluster_version.clone(),
         }
     }
 }
@@ -726,6 +730,7 @@ impl<E: Engine> GcWorker<E> {
         raft_store_router: Option<ServerRaftStoreRouter<RocksEngine>>,
         region_info_accessor: Option<RegionInfoAccessor>,
         cfg: GcConfig,
+        cluster_version: ClusterVersion,
     ) -> GcWorker<E> {
         let worker = Arc::new(Mutex::new(FutureWorker::new("gc-worker")));
         let worker_scheduler = worker.lock().unwrap().scheduler();
@@ -741,6 +746,7 @@ impl<E: Engine> GcWorker<E> {
             worker_scheduler,
             applied_lock_collector: None,
             gc_manager_handle: Arc::new(Mutex::new(None)),
+            cluster_version,
         }
     }
 
@@ -751,7 +757,9 @@ impl<E: Engine> GcWorker<E> {
         let safe_point = Arc::new(AtomicU64::new(0));
         if let Some(db) = self.local_storage.clone() {
             let safe_point = Arc::clone(&safe_point);
-            init_compaction_filter(db, safe_point, self.config_manager.clone());
+            let cfg_mgr = self.config_manager.clone();
+            let cluster_version = self.cluster_version.clone();
+            init_compaction_filter(db, safe_point, cfg_mgr, cluster_version);
         }
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
@@ -761,6 +769,7 @@ impl<E: Engine> GcWorker<E> {
             safe_point,
             self.worker_scheduler.clone(),
             self.config_manager.clone(),
+            self.cluster_version.clone(),
         )
         .start()?;
         *handle = Some(new_handle);
@@ -958,10 +967,10 @@ mod tests {
         fn async_write(
             &self,
             ctx: &Context,
-            mut batch: Vec<Modify>,
+            mut batch: WriteData,
             callback: EngineCallback<()>,
         ) -> EngineResult<()> {
-            batch.iter_mut().for_each(|modify| match modify {
+            batch.modifies.iter_mut().for_each(|modify| match modify {
                 Modify::Delete(_, ref mut key) => {
                     *key = Key::from_encoded(keys::data_key(key.as_encoded()));
                 }
@@ -1000,7 +1009,7 @@ mod tests {
     /// Assert the data in `storage` is the same as `expected_data`. Keys in `expected_data` should
     /// be encoded form without ts.
     fn check_data<E: Engine>(
-        storage: &Storage<E, DummyLockManager>,
+        storage: &Storage<E, DummyLockManager, DummyPdClient>,
         expected_data: &BTreeMap<Vec<u8>, Vec<u8>>,
     ) {
         let scan_res = storage
@@ -1034,9 +1043,10 @@ mod tests {
         // Return Result from this function so we can use the `wait_op` macro here.
 
         let engine = TestEngineBuilder::new().build().unwrap();
-        let storage = TestStorageBuilder::from_engine(engine.clone())
-            .build()
-            .unwrap();
+        let storage =
+            TestStorageBuilder::from_engine_and_lock_mgr(engine.clone(), DummyLockManager {})
+                .build()
+                .unwrap();
         let db = engine.get_rocksdb();
         let mut gc_worker = GcWorker::new(
             engine,
@@ -1044,6 +1054,7 @@ mod tests {
             None,
             None,
             GcConfig::default(),
+            ClusterVersion::new(semver::Version::new(5, 0, 0)),
         );
         gc_worker.start().unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
@@ -1199,16 +1210,19 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap();
         let db = engine.get_rocksdb();
         let prefixed_engine = PrefixedEngine(engine);
-        let storage =
-            TestStorageBuilder::<_, DummyLockManager>::from_engine(prefixed_engine.clone())
-                .build()
-                .unwrap();
+        let storage = TestStorageBuilder::<_, DummyLockManager>::from_engine_and_lock_mgr(
+            prefixed_engine.clone(),
+            DummyLockManager {},
+        )
+        .build()
+        .unwrap();
         let mut gc_worker = GcWorker::new(
             prefixed_engine,
             Some(db.c().clone()),
             None,
             None,
             GcConfig::default(),
+            ClusterVersion::default(),
         );
         gc_worker.start().unwrap();
 
@@ -1252,6 +1266,7 @@ mod tests {
             rx.recv()
                 .unwrap()
                 .unwrap()
+                .locks
                 .into_iter()
                 .for_each(|r| r.unwrap());
         }
