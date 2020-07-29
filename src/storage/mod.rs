@@ -32,7 +32,7 @@ pub use self::{
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
-use crate::storage::metrics::CommandKind;
+pub use crate::storage::metrics::CommandKind;
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
@@ -605,6 +605,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             &ctx,
             WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
         Ok(())
@@ -829,6 +830,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 value,
             )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
         Ok(())
@@ -858,6 +860,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             &ctx,
             WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
         Ok(())
@@ -880,6 +883,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 Key::from_encoded(key),
             )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
         Ok(())
@@ -910,6 +914,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             &ctx,
             WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
         Ok(())
@@ -934,6 +939,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             &ctx,
             WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
         Ok(())
