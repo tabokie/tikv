@@ -256,9 +256,11 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
         }
 
         if batch.is_empty() {
-            self.handler.pause();
-            if let Ok(fsm) = self.fsm_receiver.recv() {
-                return batch.push(fsm);
+            loop {
+                self.handler.pause();
+                if let Ok(fsm) = self.fsm_receiver.recv_timeout(Duration::from_nanos(100000)) {
+                    return batch.push(fsm);
+                }
             }
         }
         !batch.is_empty()

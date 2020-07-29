@@ -376,6 +376,14 @@ pub enum PeerMsg<EK: KvEngine> {
     HeartbeatPd,
     /// Asks region to change replication mode.
     UpdateReplicationMode,
+    Synced(u64),
+    AsyncSendMsgFailed(PeerMsgTrivialInfo),
+}
+
+pub struct PeerMsgTrivialInfo {
+    pub to_peer_id: u64,
+    pub to_leader: bool,
+    pub is_snapshot_msg: bool,
 }
 
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
@@ -395,6 +403,12 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
             PeerMsg::CasualMessage(msg) => write!(fmt, "CasualMessage {:?}", msg),
             PeerMsg::HeartbeatPd => write!(fmt, "HeartbeatPd"),
             PeerMsg::UpdateReplicationMode => write!(fmt, "UpdateReplicationMode"),
+            PeerMsg::Synced(idx) => write!(fmt, "Synced {:?}", idx),
+            PeerMsg::AsyncSendMsgFailed(info) => write!(
+                fmt,
+                "ToPeer {:?}, ToLeader {:?}, IsSnapshotMsg {:?}",
+                info.to_peer_id, info.to_leader, info.is_snapshot_msg,
+            ),
         }
     }
 }

@@ -398,6 +398,128 @@ impl RaftInvalidProposeMetrics {
         }
     }
 }
+
+/// The buffered metrics counters for raft sync log event.
+#[derive(Clone)]
+pub struct SyncEvents {
+    pub sync_raftdb_count: u64,
+    pub sync_raftdb_reach_deadline: u64,
+    pub sync_raftdb_reach_deadline_no_ready: u64,
+    pub sync_raftdb_before_pause: u64,
+    pub raftdb_skipped_sync_count: u64,
+    pub sync_raftdb_ready_must_sync: u64,
+    pub sync_raftdb_trans_delayed_cache_is_full: u64,
+    pub sync_raftdb_storage_entry_require: u64,
+    pub sync_raftdb_storage_entry_ctx_require: u64,
+    pub sync_raftdb_peer_destroy: u64,
+    pub sync_kvdb_count: u64,
+    pub sync_kvdb_ready_must_sync: u64,
+    pub sync_kvdb_peer_destroy: u64,
+}
+
+impl Default for SyncEvents {
+    fn default() -> SyncEvents {
+        SyncEvents {
+            sync_raftdb_count: 0,
+            sync_raftdb_reach_deadline: 0,
+            sync_raftdb_reach_deadline_no_ready: 0,
+            sync_raftdb_before_pause: 0,
+            raftdb_skipped_sync_count: 0,
+            sync_raftdb_ready_must_sync: 0,
+            sync_raftdb_trans_delayed_cache_is_full: 0,
+            sync_raftdb_storage_entry_require: 0,
+            sync_raftdb_storage_entry_ctx_require: 0,
+            sync_raftdb_peer_destroy: 0,
+            sync_kvdb_count: 0,
+            sync_kvdb_ready_must_sync: 0,
+            sync_kvdb_peer_destroy: 0,
+        }
+    }
+}
+
+impl SyncEvents {
+    fn flush(&mut self) {
+        if self.sync_raftdb_count > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_count"])
+                .inc_by(self.sync_raftdb_count as i64);
+            self.sync_raftdb_count = 0;
+        }
+        if self.sync_raftdb_reach_deadline > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_reach_deadline"])
+                .inc_by(self.sync_raftdb_reach_deadline as i64);
+            self.sync_raftdb_reach_deadline = 0;
+        }
+        if self.sync_raftdb_reach_deadline_no_ready > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_reach_deadline_no_ready"])
+                .inc_by(self.sync_raftdb_reach_deadline_no_ready as i64);
+            self.sync_raftdb_reach_deadline_no_ready = 0;
+        }
+        if self.sync_raftdb_before_pause > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_before_pause"])
+                .inc_by(self.sync_raftdb_before_pause as i64);
+            self.sync_raftdb_before_pause = 0;
+        }
+        if self.raftdb_skipped_sync_count > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["raftdb_skipped_sync_count"])
+                .inc_by(self.raftdb_skipped_sync_count as i64);
+            self.raftdb_skipped_sync_count = 0;
+        }
+        if self.sync_raftdb_ready_must_sync > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_ready_must_sync"])
+                .inc_by(self.sync_raftdb_ready_must_sync as i64);
+            self.sync_raftdb_ready_must_sync = 0;
+        }
+        if self.sync_raftdb_trans_delayed_cache_is_full > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_trans_delayed_cache_is_full"])
+                .inc_by(self.sync_raftdb_trans_delayed_cache_is_full as i64);
+            self.sync_raftdb_trans_delayed_cache_is_full = 0;
+        }
+        if self.sync_raftdb_storage_entry_require > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_storage_entry_require"])
+                .inc_by(self.sync_raftdb_storage_entry_require as i64);
+            self.sync_raftdb_storage_entry_require = 0;
+        }
+        if self.sync_raftdb_storage_entry_ctx_require > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_storage_entry_ctx_require"])
+                .inc_by(self.sync_raftdb_storage_entry_ctx_require as i64);
+            self.sync_raftdb_storage_entry_ctx_require = 0;
+        }
+        if self.sync_raftdb_peer_destroy > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_raftdb_peer_destroy"])
+                .inc_by(self.sync_raftdb_peer_destroy as i64);
+            self.sync_raftdb_peer_destroy = 0;
+        }
+        if self.sync_kvdb_count > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_kvdb_count"])
+                .inc_by(self.sync_kvdb_count as i64);
+            self.sync_kvdb_count = 0;
+        }
+        if self.sync_kvdb_ready_must_sync > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_kvdb_ready_must_sync"])
+                .inc_by(self.sync_kvdb_ready_must_sync as i64);
+            self.sync_kvdb_ready_must_sync = 0;
+        }
+        if self.sync_kvdb_peer_destroy > 0 {
+            SYNC_EVENTS
+                .with_label_values(&["sync_kvdb_peer_destroy"])
+                .inc_by(self.sync_kvdb_peer_destroy as i64);
+            self.sync_kvdb_peer_destroy = 0;
+        }
+    }
+}
+
 /// The buffered metrics counters for raft.
 #[derive(Clone)]
 pub struct RaftMetrics {
@@ -410,6 +532,9 @@ pub struct RaftMetrics {
     pub commit_log: LocalHistogram,
     pub leader_missing: Arc<Mutex<HashSet<u64>>>,
     pub invalid_proposal: RaftInvalidProposeMetrics,
+    pub sync_log_interval: LocalHistogram,
+    pub sync_delay_duration: LocalHistogram,
+    pub sync_events: SyncEvents,
 }
 
 impl Default for RaftMetrics {
@@ -426,6 +551,9 @@ impl Default for RaftMetrics {
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             leader_missing: Arc::default(),
             invalid_proposal: Default::default(),
+            sync_log_interval: PEER_SYNC_LOG_INTERVAL_HISTOGRAM.local(),
+            sync_delay_duration: PEER_SYNC_DELAY_HISTOGRAM.local(),
+            sync_events: Default::default(),
         }
     }
 }
@@ -441,6 +569,9 @@ impl RaftMetrics {
         self.commit_log.flush();
         self.message_dropped.flush();
         self.invalid_proposal.flush();
+        self.sync_log_interval.flush();
+        self.sync_delay_duration.flush();
+        self.sync_events.flush();
         let mut missing = self.leader_missing.lock().unwrap();
         LEADER_MISSING.set(missing.len() as i64);
         missing.clear();

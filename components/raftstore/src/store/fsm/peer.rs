@@ -417,7 +417,7 @@ where
     }
 }
 
-pub struct PeerFsmDelegate<'a, EK, ER, T: 'static, C: 'static>
+pub struct PeerFsmDelegate<'a, EK, ER, T: Transport, C: 'static>
 where
     EK: KvEngine,
     ER: KvEngine,
@@ -426,7 +426,7 @@ where
     ctx: &'a mut PollContext<EK, ER, T, C>,
 }
 
-impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
+impl<'a, EK, ER, T: Transport + 'static, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
 where
     EK: KvEngine,
     ER: KvEngine,
@@ -482,6 +482,15 @@ where
                 }
                 PeerMsg::Noop => {}
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
+                PeerMsg::Synced(idx) => {
+                    self.fsm.peer.on_synced(idx);
+                    self.fsm.has_ready = true;
+                }
+                PeerMsg::AsyncSendMsgFailed(info) => {
+                    self.fsm
+                        .peer
+                        .on_send_err(info.to_leader, info.is_snapshot_msg, info.to_peer_id)
+                }
             }
         }
         // Propose batch request which may be still waiting for more raft-command
@@ -1713,6 +1722,10 @@ where
             // data too.
             panic!("{} destroy err {:?}", self.fsm.peer.tag, e);
         }
+        self.ctx.raft_metrics.sync_events.sync_raftdb_peer_destroy += 1;
+        self.ctx.raft_metrics.sync_events.sync_raftdb_count += 1;
+        self.ctx.raft_metrics.sync_events.sync_kvdb_peer_destroy += 1;
+        self.ctx.raft_metrics.sync_events.sync_kvdb_count += 1;
         // Some places use `force_send().unwrap()` if the StoreMeta lock is held.
         // So in here, it's necessary to held the StoreMeta lock when closing the router.
         self.ctx.router.close(region_id);
@@ -3426,7 +3439,7 @@ where
     }
 }
 
-impl<'a, EK, ER, T: Transport, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
+impl<'a, EK, ER, T: Transport + 'static, C: PdClient> PeerFsmDelegate<'a, EK, ER, T, C>
 where
     EK: KvEngine,
     ER: KvEngine,
