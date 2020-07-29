@@ -32,7 +32,7 @@ pub use self::{
 };
 
 use crate::read_pool::{ReadPool, ReadPoolHandle};
-use crate::storage::metrics::CommandKind;
+pub use crate::storage::metrics::CommandKind;
 use crate::storage::{
     config::Config,
     kv::{with_tls_engine, Modify, WriteData},
@@ -446,6 +446,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
         start_key: Key,
         end_key: Option<Key>,
         limit: usize,
+        sample_step: usize,
         start_ts: TimeStamp,
         key_only: bool,
         reverse_scan: bool,
@@ -502,7 +503,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                         scanner =
                             snap_store.scanner(true, key_only, false, end_key, Some(start_key))?;
                     };
-                    let res = scanner.scan(limit);
+                    let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();
                     metrics::tls_collect_scan_details(CMD, &statistics);
@@ -605,6 +606,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             &ctx,
             WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.delete_range.inc();
         Ok(())
@@ -829,6 +831,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 value,
             )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_put.inc();
         Ok(())
@@ -858,6 +861,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             &ctx,
             WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_put.inc();
         Ok(())
@@ -880,6 +884,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
                 Key::from_encoded(key),
             )]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete.inc();
         Ok(())
@@ -910,6 +915,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             &ctx,
             WriteData::from_modifies(vec![Modify::DeleteRange(cf, start_key, end_key, false)]),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_delete_range.inc();
         Ok(())
@@ -934,6 +940,7 @@ impl<E: Engine, L: LockManager, P: PdClient + 'static> Storage<E, L, P> {
             &ctx,
             WriteData::from_modifies(modifies),
             Box::new(|(_, res): (_, kv::Result<_>)| callback(res.map_err(Error::from))),
+            None,
         )?;
         KV_COMMAND_COUNTER_VEC_STATIC.raw_batch_delete.inc();
         Ok(())
@@ -1601,6 +1608,7 @@ mod tests {
                     Key::from_raw(b"x"),
                     None,
                     1000,
+                    0,
                     1.into(),
                     false,
                     false,
@@ -1674,6 +1682,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1689,6 +1698,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1704,6 +1714,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1719,6 +1730,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1734,6 +1746,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1749,6 +1762,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1785,6 +1799,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1804,6 +1819,77 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
+                    5.into(),
+                    false,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with sample step
+        expect_multi_values(
+            vec![
+                Some((b"a".to_vec(), b"aa".to_vec())),
+                Some((b"c".to_vec(), b"cc".to_vec())),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1000,
+                    2,
+                    5.into(),
+                    false,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with sample step
+        expect_multi_values(
+            vec![
+                Some((b"c".to_vec(), b"cc".to_vec())),
+                Some((b"a".to_vec(), b"aa".to_vec())),
+            ],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1000,
+                    2,
+                    5.into(),
+                    false,
+                    true,
+                )
+                .wait(),
+        );
+        // Forward with sample step and limit
+        expect_multi_values(
+            vec![Some((b"a".to_vec(), b"aa".to_vec()))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\x00"),
+                    None,
+                    1,
+                    2,
+                    5.into(),
+                    false,
+                    false,
+                )
+                .wait(),
+        );
+        // Backward with sample step and limit
+        expect_multi_values(
+            vec![Some((b"c".to_vec(), b"cc".to_vec()))],
+            storage
+                .scan(
+                    Context::default(),
+                    Key::from_raw(b"\xff"),
+                    None,
+                    1,
+                    2,
                     5.into(),
                     false,
                     true,
@@ -1822,6 +1908,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1840,6 +1927,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1859,6 +1947,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     false,
@@ -1877,6 +1966,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     false,
                     true,
@@ -1936,6 +2026,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -1951,6 +2042,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -1966,6 +2058,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -1981,6 +2074,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -1996,6 +2090,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2011,6 +2106,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -2047,6 +2143,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2066,6 +2163,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -2081,6 +2179,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     Some(Key::from_raw(b"c")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2096,6 +2195,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     Some(Key::from_raw(b"b")),
                     1000,
+                    0,
                     5.into(),
                     true,
                     true,
@@ -2112,6 +2212,7 @@ mod tests {
                     Key::from_raw(b"\x00"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     false,
@@ -2127,6 +2228,7 @@ mod tests {
                     Key::from_raw(b"\xff"),
                     None,
                     2,
+                    0,
                     5.into(),
                     true,
                     true,

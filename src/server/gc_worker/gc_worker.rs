@@ -896,7 +896,7 @@ mod tests {
                     *end_key = Key::from_encoded(keys::data_end_key(end_key.as_encoded()));
                 }
             });
-            self.0.async_write(ctx, batch, callback)
+            self.0.async_write(ctx, batch, callback, None)
         }
 
         fn async_snapshot(
@@ -935,6 +935,7 @@ mod tests {
                 Key::from_encoded_slice(b""),
                 None,
                 expected_data.len() + 1,
+                0,
                 1.into(),
                 false,
                 false,
