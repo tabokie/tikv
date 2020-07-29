@@ -659,8 +659,21 @@ where
 
     fn flush_delayed_on_synced(&mut self) {
         self.trans.send_delayed();
+        let mut unsynced_regions: HashMap<u64, u64> = HashMap::default();
         for (region_id, idx) in self.unsynced_regions.drain() {
-            self.router.send(region_id, PeerMsg::Synced(idx)).unwrap();
+            let res = self.router.send(region_id, PeerMsg::Synced(idx));
+            if let Err(e) = res {
+                error!(
+                    "flush_delayed_on_synced failed";
+                    "unsynced_region_id" => region_id,
+                    "notify_index" => idx,
+                    "err" => ?e,
+                );
+                unsynced_regions.insert(region_id, idx);
+            }
+        }
+        if !unsynced_regions.is_empty() {
+            self.unsynced_regions = unsynced_regions;
         }
     }
 }
