@@ -37,8 +37,8 @@ serde_derive = "1.0"
 coarsetime = "0.1"
 
 [dependencies.rocksdb]
-git = "https://github.com/innerr/rust-rocksdb.git"
-branch = "guard+refill"
+git = "https://github.com/tabokie/rust-rocksdb.git"
+branch = "perf-dev"
 package = "rocksdb"
 features = ["encryption", "static_libcpp"]
 
