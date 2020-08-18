@@ -1819,7 +1819,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#1e0910aabe6cffc721689606d88c8117d837d3cb"
+source = "git+https://github.com/pingcap/kvproto.git#3132349c113335cb670de2c81a74fc565b49f813"
 dependencies = [
  "futures 0.1.29",
  "grpcio",
@@ -1894,7 +1894,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/innerr/rust-rocksdb.git?branch=guard_partitioner#b40767b9f8e6722c445451e5eca3d0abaefee5a0"
+source = "git+https://github.com/innerr/rust-rocksdb.git?branch=guard+refill#66e246612c8029d39d0796895d3f729550044af7"
 dependencies = [
  "bindgen",
  "bzip2-sys",
@@ -1913,7 +1913,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/innerr/rust-rocksdb.git?branch=guard_partitioner#b40767b9f8e6722c445451e5eca3d0abaefee5a0"
+source = "git+https://github.com/innerr/rust-rocksdb.git?branch=guard+refill#66e246612c8029d39d0796895d3f729550044af7"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3277,7 +3277,7 @@ checksum = "cabe4fa914dec5870285fa7f71f602645da47c486e68486d2b4ceb4a343e90ac"
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/innerr/rust-rocksdb.git?branch=guard_partitioner#b40767b9f8e6722c445451e5eca3d0abaefee5a0"
+source = "git+https://github.com/innerr/rust-rocksdb.git?branch=guard+refill#66e246612c8029d39d0796895d3f729550044af7"
 dependencies = [
  "libc",
  "librocksdb_sys",
