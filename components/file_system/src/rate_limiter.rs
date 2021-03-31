@@ -277,6 +277,9 @@ impl IORateLimiter {
     pub fn request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if io_op == IOOp::Write {
             let priority = self.priority_map[io_type as usize];
+            if priority == IOPriority::Stop {
+                do_sleep!(Duration::from_secs(1000), sync);
+            }
             bytes = self.throughput_limiter.request(priority, bytes);
         }
         if let Some(stats) = &self.stats {
@@ -292,6 +295,9 @@ impl IORateLimiter {
     pub async fn async_request(&self, io_type: IOType, io_op: IOOp, mut bytes: usize) -> usize {
         if io_op == IOOp::Write {
             let priority = self.priority_map[io_type as usize];
+            if priority == IOPriority::Stop {
+                do_sleep!(Duration::from_secs(1000), async);
+            }
             bytes = self.throughput_limiter.async_request(priority, bytes).await;
         }
         if let Some(stats) = &self.stats {

@@ -109,6 +109,7 @@ pub enum IOPriority {
     Low = 0,
     Medium = 1,
     High = 2,
+    Stop = 3,
 }
 
 impl IOPriority {
@@ -117,6 +118,7 @@ impl IOPriority {
             IOPriority::Low => "low",
             IOPriority::Medium => "medium",
             IOPriority::High => "high",
+            IOPriority::Stop => "stop",
         }
     }
 }
@@ -128,6 +130,7 @@ impl FromStr for IOPriority {
             "low" => Ok(IOPriority::Low),
             "medium" => Ok(IOPriority::Medium),
             "high" => Ok(IOPriority::High),
+            "stop" => Ok(IOPriority::Stop),
             s => Err(format!("expect: low, medium or high, got: {:?}", s)),
         }
     }
