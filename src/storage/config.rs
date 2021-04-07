@@ -8,7 +8,7 @@ use configuration::{ConfigChange, ConfigManager, ConfigValue, Configuration, Res
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use engine_rocks::RocksEngine;
 use engine_traits::{CFOptionsExt, ColumnFamilyOptions, CF_DEFAULT};
-use file_system::{get_io_rate_limiter, IOPriority, IORateLimiter, IOType};
+use file_system::{get_io_rate_limiter, IOPriority, IORateLimitMode, IORateLimiter, IOType};
 use libc::c_int;
 use std::error::Error;
 use tikv_util::config::{self, OptionReadableSize, ReadableDuration, ReadableSize};
@@ -28,9 +28,6 @@ const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
-// 20GB for reserved space is enough because size of one compaction is limited,
-// generally less than 2GB.
-pub const MAX_RESERVED_SPACE_GB: u64 = 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Configuration)]
 #[serde(default)]
@@ -90,17 +87,12 @@ impl Config {
             self.data_dir = config::canonicalize_path(&self.data_dir)?
         }
         if self.scheduler_concurrency > MAX_SCHED_CONCURRENCY {
-            warn!("TiKV has optimized latch since v4.0, so it is not necessary to set large schedule \
-                concurrency. To save memory, change it from {:?} to {:?}",
-                  self.scheduler_concurrency, MAX_SCHED_CONCURRENCY);
-            self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
-        }
-        if self.reserve_space.0 > ReadableSize::gb(MAX_RESERVED_SPACE_GB).0 {
-            self.reserve_space = ReadableSize::gb(MAX_RESERVED_SPACE_GB);
             warn!(
-                "reserve-space is too large, sanitized to {:?}",
-                self.reserve_space
+                "TiKV has optimized latch since v4.0, so it is not necessary to set large schedule \
+                concurrency. To save memory, change it from {:?} to {:?}",
+                self.scheduler_concurrency, MAX_SCHED_CONCURRENCY
             );
+            self.scheduler_concurrency = MAX_SCHED_CONCURRENCY;
         }
         self.io_rate_limit.validate()
     }
@@ -154,12 +146,11 @@ impl ConfigManager for StorageConfigManger {
                 .unwrap();
         }
         if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
-            let limiter = get_io_rate_limiter();
-            if limiter.is_none() {
-                return Err("IO rate limiter is not present".into());
-            }
-            let limiter = limiter.unwrap();
-            if let Some(limit) = io_rate_limit.remove("total") {
+            let limiter = match get_io_rate_limiter() {
+                None => return Err("IO rate limiter is not present".into()),
+                Some(limiter) => limiter,
+            };
+            if let Some(limit) = io_rate_limit.remove("max_bytes_per_sec") {
                 if let OptionReadableSize(Some(limit)) = limit.into() {
                     limiter.set_io_rate_limit(limit.0 as usize);
                 } else {
@@ -233,7 +224,10 @@ impl BlockCacheConfig {
                         return Some(allocator);
                     }
                     Err(e) => {
-                        warn!("Create jemalloc nodump allocator for block cache failed: {}, continue with default allocator", e);
+                        warn!(
+                            "Create jemalloc nodump allocator for block cache failed: {}, continue with default allocator",
+                            e
+                        );
                     }
                 },
                 "" => {}
@@ -253,7 +247,10 @@ impl BlockCacheConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct IORateLimitConfig {
-    pub total: OptionReadableSize,
+    pub max_bytes_per_sec: OptionReadableSize,
+    #[serde(with = "file_system::io_rate_limit_mode_serde")]
+    #[config(skip)]
+    pub mode: IORateLimitMode,
     #[serde(with = "file_system::io_priority_serde")]
     #[config(skip)]
     pub foreground_read_priority: IOPriority,
@@ -289,7 +286,8 @@ pub struct IORateLimitConfig {
 impl Default for IORateLimitConfig {
     fn default() -> IORateLimitConfig {
         IORateLimitConfig {
-            total: OptionReadableSize(None),
+            max_bytes_per_sec: OptionReadableSize(None),
+            mode: IORateLimitMode::WriteOnly,
             foreground_read_priority: IOPriority::High,
             foreground_write_priority: IOPriority::High,
             flush_priority: IOPriority::Medium,
@@ -306,8 +304,8 @@ impl Default for IORateLimitConfig {
 
 impl IORateLimitConfig {
     pub fn build(&self, enable_statistics: bool) -> IORateLimiter {
-        let mut limiter = IORateLimiter::new(enable_statistics);
-        if let Some(limit) = self.total.0 {
+        let mut limiter = IORateLimiter::new(self.mode, enable_statistics);
+        if let Some(limit) = self.max_bytes_per_sec.0 {
             limiter.set_io_rate_limit(limit.0 as usize);
         }
         limiter.set_io_priority(IOType::ForegroundRead, self.foreground_read_priority);
@@ -334,6 +332,9 @@ impl IORateLimitConfig {
                 IOPriority::High
             );
             self.other_priority = IOPriority::High;
+        }
+        if self.mode != IORateLimitMode::WriteOnly {
+            return Err("storage.io-rate-limit.mode other than WriteOnly is not supported.".into());
         }
         Ok(())
     }

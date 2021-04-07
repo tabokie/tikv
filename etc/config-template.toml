@@ -209,13 +209,10 @@
 ## latency jittering when apply duration is not stable.
 # enable-async-apply-prewrite = false
 
-## Reserve some space to ensure recovering the store from `no space left` must success. The
-## configured value only indicates the lower limit, and 20GB is the upper limit. In this range,
+## Reserve some space to ensure recovering the store from `no space left` must succeed.
 ## `max(reserve-space, capacity * 5%)` will be reserved exactly.
 ##
-## Set it to 0 will cause no space is reserved at all.
-##
-## Generally it's not necessary to change it. This configuration could be deprecated in future.
+## Set it to 0 will cause no space is reserved at all. It's generally used for tests.
 # reserve-space = "5GB"
 
 [storage.block-cache]
@@ -243,7 +240,19 @@
 # capacity = "1GB"
 
 [storage.io-rate-limit]
-# total = "0MB"
+## Maximum I/O bytes that this server can write to or read from disk (determined by mode)
+## in one second. Internally it prefers throttling background operations over foreground
+## ones. This value should be set to the disk's optimal IO bandwidth, e.g. maximum IO
+## bandwidth specified by cloud disk vendors.
+##
+## When set to zero, disk IO operations are not limited.
+# max-bytes-per-sec = "0MB"
+
+## Determine which types of IO operations are counted and restrained below threshold.
+## Three different modes are: WriteOnly, ReadOnly, AllIo.
+##
+## Only WriteOnly mode is supported for now.
+# mode = "write-only"
 
 [pd]
 ## PD endpoints.
