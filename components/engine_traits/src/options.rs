@@ -33,6 +33,7 @@ impl Default for ReadOptions {
 pub struct WriteOptions {
     sync: bool,
     no_slowdown: bool,
+    no_wal: bool,
 }
 
 impl WriteOptions {
@@ -40,11 +41,13 @@ impl WriteOptions {
         WriteOptions {
             sync: false,
             no_slowdown: false,
+            no_wal: false,
         }
     }
 
     pub fn set_sync(&mut self, sync: bool) {
         self.sync = sync;
+        self.no_wal = !sync;
     }
 
     pub fn sync(&self) -> bool {
@@ -58,6 +61,14 @@ impl WriteOptions {
     pub fn no_slowdown(&self) -> bool {
         self.no_slowdown
     }
+
+    pub fn set_no_wal(&mut self, no_wal: bool) {
+        self.no_wal = no_wal;
+    }
+
+    pub fn no_wal(&self) -> bool {
+        self.no_wal
+    }
 }
 
 impl Default for WriteOptions {
@@ -65,6 +76,7 @@ impl Default for WriteOptions {
         WriteOptions {
             sync: false,
             no_slowdown: false,
+            no_wal: true,
         }
     }
 }
